@@ -1,6 +1,6 @@
 use chrono::NaiveDate;
 
-use crate::parsers::hdfc_account_statement::get_hdfc_acc_statement_parser;
+use crate::statement_parsers::hdfc_account_statement::get_hdfc_acc_statement_parser;
 
 mod hdfc_account_statement;
 
@@ -10,11 +10,11 @@ pub struct UnparsedRow {
 
 #[derive(Debug)]
 pub struct ParsedRow {
-    date: NaiveDate,
-    from: String,
-    to: String,
-    description: String,
-    amount: f32,
+    pub date: NaiveDate,
+    pub source: String,
+    pub destination: String,
+    pub description: String,
+    pub amount: i32,
 }
 
 pub struct StatementParser {
