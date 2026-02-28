@@ -1,54 +1,64 @@
 use chrono::NaiveDate;
 
-use crate::statement_parsers::hdfc_account_statement::get_hdfc_acc_statement_parser;
-
 mod hdfc_account_statement;
 
+use self::hdfc_account_statement::HDFC_ACCOUNT_PARSER;
+
+/// All available parsers
+static PARSERS: &[StatementParser] = &[HDFC_ACCOUNT_PARSER];
+
+/// Raw CSV row before parsing
+#[derive(Debug)]
 pub struct UnparsedRow {
-    cells: Vec<String>,
+    pub cells: Vec<String>,
 }
 
+/// Normalized row after parsing
 #[derive(Debug)]
 pub struct ParsedRow {
     pub date: NaiveDate,
     pub source: String,
     pub destination: String,
     pub description: String,
-    pub amount: i32,
+    pub amount: i64, // minor units
 }
 
+/// Parser definition
 pub struct StatementParser {
-    name: &'static str,
-    parser: fn(
+    pub name: &'static str,
+    pub parser: fn(
         default_from: Option<&String>,
         default_to: Option<&String>,
-        row: UnparsedRow,
-    ) -> Option<ParsedRow>,
+        row: &UnparsedRow,
+    ) -> anyhow::Result<ParsedRow>,
 }
 
+/// Public entry point
 pub fn parse_statement(
-    name: String,
-    default_from: Option<String>,
-    default_to: Option<String>,
+    name: &str,
+    default_from: Option<&String>,
+    default_to: Option<&String>,
     data: Vec<Vec<String>>,
-) -> Vec<ParsedRow> {
+) -> anyhow::Result<Vec<ParsedRow>> {
     let parser = get_statement_parser(name);
 
-    map_unparsed_row(data)
-        .into_iter()
-        .filter_map(|row| (parser.parser)(default_from.as_ref(), default_to.as_ref(), row))
-        .collect()
+    anyhow::Ok(
+        data.into_iter()
+            .filter_map(|cells| {
+                let row = UnparsedRow { cells };
+                match (parser.parser)(default_from, default_to, &row) {
+                    Ok(p) => Some(p),
+                    Err(e) => {
+                        eprintln!("Skipping row: {}", e);
+                        None
+                    }
+                }
+            })
+            .collect(),
+    )
 }
 
-pub fn map_unparsed_row(row: Vec<Vec<String>>) -> Vec<UnparsedRow> {
-    row.into_iter()
-        .map(|row| UnparsedRow { cells: row })
-        .collect()
-}
-
-fn get_statement_parser(name: String) -> StatementParser {
-    vec![get_hdfc_acc_statement_parser()]
-        .into_iter()
-        .find(|v| v.name == name.as_str())
-        .expect("Could not find matching parser")
+/// Get statement parser
+fn get_statement_parser(name: &str) -> &'static StatementParser {
+    PARSERS.iter().find(|p| p.name == name).expect("Could not find matching parser")
 }

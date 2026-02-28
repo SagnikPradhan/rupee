@@ -1,45 +1,43 @@
-use std::path::PathBuf;
+use std::path::Path;
 
-pub fn parse(path: &PathBuf, user_file_type: Option<String>) -> Vec<Vec<String>> {
-    let file_extension = path
-        .extension()
-        .map(|ext| ext.to_str().unwrap().to_string())
-        .unwrap_or_default();
-
-    let file_type = user_file_type.unwrap_or(file_extension).to_lowercase();
+pub fn parse(path: &Path, user_file_type: Option<String>) -> anyhow::Result<Vec<Vec<String>>> {
+    let file_type = user_file_type
+        .or_else(|| path.extension().and_then(|ext| ext.to_str()).map(|s| s.to_string()))
+        .unwrap_or_default()
+        .to_lowercase();
 
     match file_type.as_str() {
-        "csv" => return parse_csv(path),
-        "xls" => return parse_xls(path),
-        _ => panic!("File is not supported"),
+        "csv" => parse_csv(path),
+        "xls" | "xlsx" => parse_xls(path),
+        _ => anyhow::bail!("Unsupported file type: {}", file_type),
     }
 }
 
-fn parse_csv(path: &PathBuf) -> Vec<Vec<String>> {
-    use csv::Reader;
+fn parse_csv(path: &Path) -> anyhow::Result<Vec<Vec<String>>> {
+    let mut reader = csv::Reader::from_path(path)?;
 
-    Reader::from_path(path)
-        .expect("Cannot open file")
-        .into_records()
+    let rows = reader
+        .records()
         .map(|row| {
-            row.expect("Cannot read row")
-                .into_iter()
-                .map(|cell| String::from(cell.trim()))
-                .collect()
+            let row = row?;
+            Ok(row.iter().map(|c| c.trim().to_string()).collect())
         })
-        .collect()
+        .collect::<Result<Vec<Vec<String>>, csv::Error>>()?;
+
+    Ok(rows)
 }
 
-fn parse_xls(path: &PathBuf) -> Vec<Vec<String>> {
-    use calamine::{DataType, Reader, open_workbook_auto};
+fn parse_xls(path: &Path) -> anyhow::Result<Vec<Vec<String>>> {
+    use calamine::{open_workbook_auto, Reader};
 
-    let mut book = open_workbook_auto(&path).expect("Cannot parse file");
-    let first_sheet = book.worksheet_range_at(0).unwrap().unwrap();
-    let rows = first_sheet.rows().map(|row| {
-        row.iter()
-            .map(|cell| cell.as_string().unwrap_or_default().trim().to_string())
-            .collect()
-    });
+    let mut workbook = open_workbook_auto(path)?;
+    let range =
+        workbook.worksheet_range_at(0).ok_or_else(|| anyhow::anyhow!("No sheets found"))??;
 
-    rows.collect()
+    let rows = range
+        .rows()
+        .map(|row| row.iter().map(|cell| cell.to_string().trim().to_string()).collect())
+        .collect();
+
+    Ok(rows)
 }

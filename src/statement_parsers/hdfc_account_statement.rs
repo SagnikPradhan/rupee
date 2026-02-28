@@ -1,31 +1,35 @@
-use crate::statement_parsers::{ParsedRow, StatementParser};
+use crate::statement_parsers::{ParsedRow, UnparsedRow};
+use anyhow::{bail, Result};
 use chrono::NaiveDate;
+use rusty_money::{iso, Money};
 
-pub fn get_hdfc_acc_statement_parser() -> StatementParser {
-    StatementParser {
-        name: "HDFC Account",
-        parser: |default_from, default_to, row| {
-            let Ok(date) = NaiveDate::parse_from_str(&row.cells[0], "%d/%m/%Y") else {
-                return None;
-            };
+pub const HDFC_ACCOUNT_PARSER: super::StatementParser =
+    super::StatementParser { name: "HDFC Account", parser: parse_hdfc_row };
 
-            let source = default_from.cloned().unwrap_or(row.cells[1].clone());
-            let destination = default_to.cloned().unwrap_or(row.cells[1].clone());
-            let description = row.cells[1].clone();
-            let amount = row.cells[3]
-                .parse::<f32>()
-                .map(|amount| 0 as f32 - (amount))
-                .or(row.cells[4].parse::<f32>())
-                .map(|amount| (amount * 1000.0).round() as i32)
-                .unwrap();
+pub fn parse_hdfc_row(
+    default_from: Option<&String>,
+    default_to: Option<&String>,
+    row: &UnparsedRow,
+) -> Result<ParsedRow> {
+    let date = NaiveDate::parse_from_str(
+        row.cells.get(0).ok_or_else(|| anyhow::anyhow!("Missing date"))?,
+        "%d/%m/%Y",
+    )?;
 
-            Some(ParsedRow {
-                date,
-                source,
-                destination,
-                amount,
-                description,
-            })
-        },
-    }
+    let description =
+        row.cells.get(1).ok_or_else(|| anyhow::anyhow!("Missing description"))?.clone();
+
+    let source = default_from.cloned().unwrap_or_else(|| description.clone());
+    let destination = default_to.cloned().unwrap_or_else(|| description.clone());
+
+    let parse_money =
+        |idx| row.cells.get(idx).and_then(|v: &String| Money::from_str(v.trim(), iso::INR).ok());
+
+    let amount = match (parse_money(3), parse_money(4)) {
+        (Some(d), None) => -d.to_minor_units(),
+        (None, Some(c)) => c.to_minor_units(),
+        _ => bail!("Invalid debit/credit structure"),
+    };
+
+    Ok(ParsedRow { date, source, destination, description, amount })
 }

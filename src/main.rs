@@ -1,51 +1,35 @@
 use clap::Parser;
-use std::path::PathBuf;
 
-use crate::database::{establish_connection, helpers::create_transaction};
-
+mod commands;
+mod data_sources;
 mod database;
 mod file_parsers;
 mod statement_parsers;
 
-#[derive(Parser, Debug)]
+#[derive(clap::Parser, Debug)]
 #[command(version, about, long_about = None)]
-struct Args {
-    /// Template used to parse the input file
-    #[arg(short = 'p')]
-    template: String,
-
-    /// Path to the input file
-    file: PathBuf,
-
-    /// Explicit file type (overrides auto-detection)
-    #[arg(short = 'k')]
-    file_type: Option<String>,
-
-    /// Default source account
-    #[arg(short = 's')]
-    from: Option<String>,
-
-    /// Default destination account
-    #[arg(short = 'd')]
-    to: Option<String>,
+#[command(propagate_version = true)]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
 }
 
-fn main() {
-    let args = Args::parse();
-    let content = file_parsers::parse(&args.file, args.file_type);
-    let data = statement_parsers::parse_statement(args.template, args.from, args.to, content);
+#[derive(clap::Subcommand, Debug)]
+enum Commands {
+    /// Parse and ingest a statement
+    Parse(commands::parse::ParseArgs),
+    /// Get rolling returns of a fund
+    Rolling(commands::rolling::RollingArgs),
+}
 
-    let mut connection = establish_connection();
-    data.iter().for_each(|row| {
-        create_transaction(
-            &mut connection,
-            &row.date,
-            &row.description,
-            &row.amount,
-            &row.source,
-            &row.destination,
-        );
-    });
+fn main() -> anyhow::Result<()> {
+    let args = Cli::parse();
+    let mut connection = database::establish_connection();
 
-    println!("{:?}", data)
+    match args.command {
+        Commands::Parse(args) => commands::parse::handler(args, &mut connection)?,
+        Commands::Rolling(args) => commands::rolling::handler(args)?,
+    }
+
+    Ok(())
 }

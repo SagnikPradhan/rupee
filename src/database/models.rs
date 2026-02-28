@@ -1,5 +1,4 @@
 use crate::database::schema::transaction;
-use chrono::NaiveDate;
 use diesel::prelude::*;
 
 #[derive(Queryable, Selectable)]
@@ -7,9 +6,9 @@ use diesel::prelude::*;
 #[diesel(check_for_backend(diesel::sqlite::Sqlite))]
 pub struct Transaction {
     pub id: String,
-    pub date: NaiveDate,
+    pub date: i32,
     pub description: String,
-    pub amount: i32,
+    pub amount: i64,
     pub source: String,
     pub destination: String,
 }
@@ -18,9 +17,9 @@ pub struct Transaction {
 #[diesel(table_name = transaction)]
 pub struct NewTransaction<'a> {
     pub id: &'a str,
-    pub date: &'a NaiveDate,
+    pub date: &'a i32,
     pub description: &'a str,
-    pub amount: &'a i32,
+    pub amount: &'a i64,
     pub source: &'a str,
     pub destination: &'a str,
 }

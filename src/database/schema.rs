@@ -3,9 +3,9 @@
 diesel::table! {
     transaction (id) {
         id -> Text,
-        date -> Date,
+        date -> Integer,
         description -> Text,
-        amount -> Integer,
+        amount -> BigInt,
         source -> Text,
         destination -> Text,
     }
