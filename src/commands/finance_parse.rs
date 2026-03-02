@@ -1,7 +1,8 @@
 use crate::{database, file_parsers, statement_parsers};
+use anyhow::Result;
 
 #[derive(clap::Args, Debug)]
-pub struct ParseArgs {
+pub struct FinanceParseArgs {
     /// Template used to parse the input file
     #[arg(short = 'p')]
     template: String,
@@ -22,8 +23,8 @@ pub struct ParseArgs {
     to: Option<String>,
 }
 
-pub fn handler(args: ParseArgs, connection: &mut diesel::SqliteConnection) -> anyhow::Result<()> {
-    let ParseArgs { template, file, file_type, from, to } = args;
+pub fn handler(args: FinanceParseArgs, connection: &mut diesel::SqliteConnection) -> Result<()> {
+    let FinanceParseArgs { template, file, file_type, from, to } = args;
 
     let content = file_parsers::parse(&file, file_type)?;
     let data = statement_parsers::parse_statement(&template, from.as_ref(), to.as_ref(), content)?;

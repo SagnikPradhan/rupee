@@ -1,9 +1,10 @@
 use crate::data_sources::mf_api::{PricePoint, get_fund_details};
+use anyhow::{Result, ensure};
 use chrono::{Duration, Months, NaiveDate};
 use comfy_table::{ContentArrangement, Table, presets::UTF8_FULL};
 
 #[derive(clap::Args, Debug)]
-pub struct RollingArgs {
+pub struct AnalysisRollingArgs {
     /// Fund name
     fund: String,
 }
@@ -65,8 +66,8 @@ impl std::fmt::Display for Period {
     }
 }
 
-pub fn handler(args: RollingArgs) -> anyhow::Result<()> {
-    let details = get_fund_details(&args.fund)?;
+pub async fn handler(args: AnalysisRollingArgs) -> Result<()> {
+    let details = get_fund_details(&args.fund).await?;
 
     let all_periods = vec![
         Period::OneWeek,
@@ -107,8 +108,8 @@ pub fn handler(args: RollingArgs) -> anyhow::Result<()> {
 }
 
 /// Compute rolling return statistics for a given period.
-fn rolling_return_stats(postings: &[PricePoint], period: &Period) -> anyhow::Result<RollingStats> {
-    anyhow::ensure!(postings.len() > 2, "Cannot calculate stats on very small sets");
+fn rolling_return_stats(postings: &[PricePoint], period: &Period) -> Result<RollingStats> {
+    ensure!(postings.len() > 2, "Cannot calculate stats on very small sets");
 
     let mut end = 0;
     let mut returns = Vec::new();
@@ -138,8 +139,8 @@ fn compute_return(start: i64, end: i64, days: i64) -> f64 {
     if days <= 365 { ratio - 1.0 } else { ratio.powf(365.25 / days as f64) - 1.0 }
 }
 
-fn compute_stats(values: Vec<f64>) -> anyhow::Result<RollingStats> {
-    anyhow::ensure!(!values.is_empty(), "Cannot calculate stats on empty set");
+fn compute_stats(values: Vec<f64>) -> Result<RollingStats> {
+    ensure!(!values.is_empty(), "Cannot calculate stats on empty set");
 
     let count = values.len();
     let count_f = count as f64;
@@ -160,8 +161,8 @@ fn compute_stats(values: Vec<f64>) -> anyhow::Result<RollingStats> {
     })
 }
 
-fn get_median(values: &Vec<f64>) -> anyhow::Result<f64> {
-    anyhow::ensure!(!values.is_empty(), "Cannot calculate median on empty set");
+fn get_median(values: &Vec<f64>) -> Result<f64> {
+    ensure!(!values.is_empty(), "Cannot calculate median on empty set");
 
     let mut sorted = values.clone();
     let count = sorted.len();
@@ -177,9 +178,9 @@ fn get_median(values: &Vec<f64>) -> anyhow::Result<f64> {
     Ok(sorted[mid_idx])
 }
 
-fn get_iqm(values: &Vec<f64>) -> anyhow::Result<f64> {
+fn get_iqm(values: &Vec<f64>) -> Result<f64> {
     let n = values.len();
-    anyhow::ensure!(n >= 4, "Need at least 4 values for IQM");
+    ensure!(n >= 4, "Need at least 4 values for IQM");
 
     let mut data = values.clone();
 
