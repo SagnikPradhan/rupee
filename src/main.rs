@@ -12,7 +12,7 @@ mod statement_parsers;
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args = Cli::parse();
-    let mut connection = database::establish_connection();
+    let mut connection = database::establish_connection().await?;
 
     match args.command {
         Commands::FinanceGroup(finance) => match finance.finance_commands {

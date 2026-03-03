@@ -23,7 +23,7 @@ pub struct FinanceParseArgs {
     to: Option<String>,
 }
 
-pub fn handler(args: FinanceParseArgs, connection: &mut diesel::SqliteConnection) -> Result<()> {
+pub fn handler(args: FinanceParseArgs, connection: &mut diesel::PgConnection) -> Result<()> {
     let FinanceParseArgs { template, file, file_type, from, to } = args;
 
     let content = file_parsers::parse(&file, file_type)?;
