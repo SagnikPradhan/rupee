@@ -4,7 +4,7 @@ use crate::commands;
 
 // Top-level CLI
 #[derive(Parser, Debug)]
-#[clap(name = "pcparts")] // or whatever your binary name is
+#[clap(name = "rupee")]
 #[clap(version, about)]
 pub struct Cli {
     #[clap(subcommand)]
@@ -45,8 +45,12 @@ pub struct Analysis {
 
 #[derive(Subcommand, Debug)]
 pub enum AnalysisCommands {
+    /// Prepare analysis data (fetch and store market snapshots)
+    Prepare(commands::analysis_prepare::AnalysisPrepareArgs),
+
     /// Construct a market index
     Index(commands::analysis_index::AnalysisIndexArgs),
+
     /// Rolling returns of a fund
     Rolling(commands::analysis_rolling::AnalysisRollingArgs),
 }

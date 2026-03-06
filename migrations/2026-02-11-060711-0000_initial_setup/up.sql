@@ -7,7 +7,10 @@ CREATE TABLE transactions (
     description TEXT NOT NULL,
     amount BIGINT NOT NULL,
     source TEXT NOT NULL,
-    destination TEXT NOT NULL
+    destination TEXT NOT NULL,
+
+    CONSTRAINT unique_transaction
+        UNIQUE (date, description, amount, source, destination)
 );
 
 CREATE TABLE price_listing (
@@ -15,7 +18,10 @@ CREATE TABLE price_listing (
     date DATE NOT NULL,
     isin TEXT NOT NULL,
     ticker TEXT NOT NULL,
-    amount BIGINT NOT NULL
+    amount BIGINT NOT NULL,
+
+    CONSTRAINT unique_price_listing
+        UNIQUE (ticker, date)
 );
 
 -- Helpful indexes

@@ -1,4 +1,6 @@
-use anyhow::{Context, Ok, Result, ensure};
+use std::fs;
+
+use anyhow::{Context, Result, ensure};
 use chrono::NaiveDate;
 use reqwest_middleware::ClientWithMiddleware;
 use serde::Deserialize;
@@ -12,35 +14,35 @@ pub struct Bhavcopy {
 
 #[derive(Debug, Deserialize)]
 pub struct BhavRecord {
+    #[serde(rename = "SctySrs")]
+    pub series: String,
     #[serde(rename = "ISIN")]
     pub isin: String,
-    // #[serde(rename = "TckrSymb")]
-    // pub symbol: String,
-    #[serde(rename = "FinInstrmNm")]
-    pub name: String,
-    #[serde(rename = "OpnPric")]
-    pub open: f64,
-    // #[serde(rename = "HghPric")]
-    // pub high: f64,
-    // #[serde(rename = "LwPric")]
-    // pub low: f64,
+    #[serde(rename = "TckrSymb")]
+    pub ticker: String,
     #[serde(rename = "ClsPric")]
-    pub close: f64,
-    #[serde(rename = "TtlTrfVal")]
-    pub volume: f64,
+    pub close: String,
 }
 
 pub async fn get_bhavcopy(
     client: &ClientWithMiddleware,
     date: NaiveDate,
 ) -> Result<Option<Bhavcopy>> {
+    println!("Fetching bhavcopy {}", date);
     let data = request_bhavcopy(client, date).await?;
     if data.is_none() {
+        println!("No bhavcopy available for {}", date);
         return Ok(None);
     }
 
     let csv = unzip_file(&data.unwrap())?;
+    let csv_path = format!("data/bhav/{}.csv", date);
+    fs::create_dir_all("data/bhav")?;
+    fs::write(&csv_path, &csv)?;
+    println!("Saved csv to {}", csv_path);
+
     let records = parse_csv(&csv)?;
+    println!("Parsed {} records for {}", records.len(), date);
 
     Ok(Some(Bhavcopy { date, records }))
 }
@@ -104,11 +106,22 @@ fn unzip_file(zip_bytes: &[u8]) -> Result<Vec<u8>> {
 }
 
 fn parse_csv(bytes: &[u8]) -> Result<Vec<BhavRecord>> {
-    let mut rdr = csv::ReaderBuilder::new().flexible(true).from_reader(bytes);
-
     let mut records = Vec::new();
-    for record in rdr.deserialize::<BhavRecord>().flatten() {
-        records.push(record);
+    let mut rdr = csv::ReaderBuilder::new()
+        .flexible(true)
+        .has_headers(true)
+        .trim(csv::Trim::All)
+        .from_reader(bytes);
+
+    let headers = rdr.headers()?.iter().take_while(|v| !v.is_empty()).collect();
+    rdr.set_headers(headers);
+
+    for result in rdr.deserialize::<BhavRecord>() {
+        if let Ok(record) = result {
+            if record.series == "EQ" {
+                records.push(record);
+            }
+        }
     }
 
     Ok(records)
