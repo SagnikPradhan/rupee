@@ -12,6 +12,7 @@ comfy-table = "7.2.2"
 csv = "1.4.0"
 dialoguer = "0.12.0"
 diesel = { version = "2.3.6", features = ["chrono", "postgres", "uuid"] }
+diesel-derive-enum = { version = "2.1.0", features = ["postgres"] }
 diesel_migrations = { version = "2.3.1", features = ["postgres"] }
 dirs = "6.0.0"
 dotenvy = "0.15"

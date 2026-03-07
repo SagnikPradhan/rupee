@@ -16,6 +16,13 @@ pub struct Transaction {
     pub destination: String,
 }
 
+#[derive(diesel_derive_enum::DbEnum, Debug)]
+#[ExistingTypePath = "crate::database::schema::sql_types::PriceSource"]
+pub enum PriceSource {
+    Nse,
+    Mfapi,
+}
+
 #[derive(Queryable, Selectable, Insertable)]
 #[diesel(table_name = price_listing)]
 #[diesel(check_for_backend(diesel::pg::Pg))]
@@ -24,5 +31,6 @@ pub struct PriceListing {
     pub date: NaiveDate,
     pub isin: String,
     pub ticker: String,
+    pub source: PriceSource,
     pub amount: i64,
 }

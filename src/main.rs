@@ -26,7 +26,7 @@ async fn main() -> anyhow::Result<()> {
         Commands::AnalysisGroup(analysis) => match analysis.analysis_commands {
             AnalysisCommands::Prepare(args) => analysis_prepare::handler(args, &mut conn).await?,
             AnalysisCommands::Rolling(args) => analysis_rolling::handler(args).await?,
-            AnalysisCommands::Index(args) => analysis_index::handler(args).await?,
+            AnalysisCommands::Index(args) => analysis_index::handler(args, &mut conn).await?,
         },
     }
 

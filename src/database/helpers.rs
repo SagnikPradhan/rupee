@@ -1,5 +1,3 @@
-use std::collections::HashSet;
-
 use diesel::{ExpressionMethods, PgConnection, RunQueryDsl, SelectableHelper, upsert};
 
 use crate::database::models::{PriceListing, Transaction};
@@ -16,15 +14,6 @@ pub fn create_transaction(conn: &mut PgConnection, transaction: Transaction) -> 
 }
 
 pub fn create_price_listings(conn: &mut PgConnection, listings: &[PriceListing]) -> usize {
-    let mut seen = HashSet::new();
-
-    for l in listings {
-        let key = (&l.ticker, l.date);
-        if !seen.insert(key) {
-            println!("Duplicate: {} {}", l.ticker, l.date);
-        }
-    }
-
     diesel::insert_into(price_listing::table)
         .values(listings)
         .on_conflict((price_listing::ticker, price_listing::date))
