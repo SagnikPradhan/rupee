@@ -42,6 +42,7 @@ export const draft = (options: DraftOptions): Draft => ({
 		transactions: options.records
 			.toSorted((a, b) => a.location.line - b.location.line)
 			.map(toTransaction(options.account)),
+		prices: [],
 	}),
 	failed: options.failed,
 });
@@ -67,6 +68,7 @@ const toTransaction =
 				amount: record.amount,
 				commodity: DEFAULT_COMMODITY,
 				price: null,
+				cost: null,
 				balance: record.balance,
 				metadata: {},
 			},
@@ -75,6 +77,7 @@ const toTransaction =
 				amount: -record.amount as Amount,
 				commodity: DEFAULT_COMMODITY,
 				price: null,
+				cost: null,
 				balance: null,
 				metadata: {},
 			},

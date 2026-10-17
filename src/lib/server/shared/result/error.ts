@@ -19,6 +19,7 @@ export type RupeeError =
 	| { type: 'ParseMultipleImplicitPostings'; location: string }
 	| { type: 'ParseInvalidMetadata'; location: string }
 	| { type: 'ParseDetachedMetadata'; location: string }
+	| { type: 'ParseInvalidPrice'; location: string }
 	| { type: 'EventInvalidMembership'; location: string }
 	| { type: 'EventStale'; location: string }
 	| { type: 'EventIdTaken'; event: string }
@@ -40,6 +41,8 @@ export type RupeeError =
 			actual: string;
 	  }
 	| { type: 'BalanceAssertionAmbiguous'; location: string; account: string; unordered: string }
+	| { type: 'LotCostMissing'; location: string; account: string }
+	| { type: 'LotNotOpen'; location: string; account: string; units: string }
 	| { type: 'ExtractionInvalidSchema'; path: string; reason: string }
 	| { type: 'ExtractionUnsupportedFile'; path: string }
 	| { type: 'ExtractionMissingModel'; path: string; cause?: RupeeError[] }

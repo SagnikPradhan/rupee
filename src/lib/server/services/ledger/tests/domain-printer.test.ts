@@ -24,6 +24,7 @@ const transactions: RupeeTransaction[] = [
 				amount: amount('100.5'),
 				commodity: 'INR',
 				price: null,
+				cost: null,
 				balance: null,
 				metadata: {},
 			},
@@ -32,6 +33,7 @@ const transactions: RupeeTransaction[] = [
 				amount: amount('-100.5'),
 				commodity: 'INR',
 				price: null,
+				cost: null,
 				balance: null,
 				metadata: {},
 			},
@@ -49,6 +51,7 @@ const transactions: RupeeTransaction[] = [
 				amount: amount('-0.000001'),
 				commodity: 'INR',
 				price: null,
+				cost: null,
 				balance: null,
 				metadata: {},
 			},
@@ -57,6 +60,7 @@ const transactions: RupeeTransaction[] = [
 				amount: amount('0.000001'),
 				commodity: 'INR',
 				price: null,
+				cost: null,
 				balance: null,
 				metadata: {},
 			},
@@ -64,7 +68,11 @@ const transactions: RupeeTransaction[] = [
 	},
 ];
 
-const ledger = (t: RupeeTransaction[]): RupeeLedgerFile => ({ metadata: {}, transactions: t });
+const ledger = (t: RupeeTransaction[]): RupeeLedgerFile => ({
+	metadata: {},
+	transactions: t,
+	prices: [],
+});
 
 const annotated: RupeeLedgerFile = {
 	metadata: { statement: ['hdfc-card-oct-2026.pdf'] },
@@ -81,6 +89,7 @@ const annotated: RupeeLedgerFile = {
 					amount: amount('-1299'),
 					commodity: 'INR',
 					price: null,
+					cost: null,
 					balance: null,
 					metadata: {},
 				},
@@ -89,6 +98,7 @@ const annotated: RupeeLedgerFile = {
 					amount: amount('499'),
 					commodity: 'INR',
 					price: null,
+					cost: null,
 					balance: null,
 					metadata: { tags: ['gift, 80c'] },
 				},
@@ -97,12 +107,14 @@ const annotated: RupeeLedgerFile = {
 					amount: amount('800'),
 					commodity: 'INR',
 					price: null,
+					cost: null,
 					balance: null,
 					metadata: {},
 				},
 			],
 		},
 	],
+	prices: [],
 };
 
 describe('printing a ledger', () => {
@@ -133,6 +145,7 @@ describe('printing a ledger', () => {
 							amount: amount(a),
 							commodity: 'INR',
 							price: null,
+							cost: null,
 							balance: null,
 							metadata: {},
 						})),
@@ -160,6 +173,7 @@ describe('printing a ledger', () => {
 		const content = print(defaultConfiguration.ledger, ledger(transactions));
 		expect(parse(defaultConfiguration.ledger, { key: 'a.rupee', content })).toEqual({
 			metadata: {},
+			prices: [],
 			succeeded: transactions,
 			failed: [],
 		});
@@ -187,6 +201,7 @@ describe('printing a ledger', () => {
 		const content = print(defaultConfiguration.ledger, annotated);
 		expect(parse(defaultConfiguration.ledger, { key: 'a.rupee', content })).toEqual({
 			metadata: annotated.metadata,
+			prices: [],
 			succeeded: annotated.transactions,
 			failed: [],
 		});
@@ -212,6 +227,21 @@ describe('printing a ledger', () => {
 		);
 	});
 
+	it('writes a lot cost between the amount and the price, and reads it back', () => {
+		const content = [
+			'2026-10-01 Sell INFY',
+			'\tAssets:Zerodha -4.00 INFY {1500.00} @ 1700.00',
+			'\tAssets:Zerodha -2.00 INFY {900.00, 2019-03-04} @ 1700.00',
+			'\tAssets:Bank 10200.00',
+			'\tIncome:Gains -2400.00',
+			'',
+		].join('\n');
+		const parsed = parse(defaultConfiguration.ledger, { key: 'a.rupee', content });
+
+		expect(parsed.failed).toEqual([]);
+		expect(print(defaultConfiguration.ledger, ledger(parsed.succeeded))).toBe(content);
+	});
+
 	it('spells out commodities and prices, and reads them back', () => {
 		const content = [
 			'2026-10-01 Buy AAPL',
@@ -227,6 +257,24 @@ describe('printing a ledger', () => {
 
 		expect(parsed.failed).toEqual([]);
 		expect(print(defaultConfiguration.ledger, ledger(parsed.succeeded))).toBe(content);
+	});
+
+	it('writes market prices after the transactions, and reads them back', () => {
+		const content = [
+			'2026-10-01 Buy INFY',
+			'\tAssets:Zerodha 10.00 INFY @ 1500.00',
+			'\tAssets:Bank -15000.00',
+			'',
+			'P 2026-10-17 INFY 1820.00',
+			'P 2026-10-17 AAPL 230.50 USD',
+			'',
+		].join('\n');
+		const parsed = parse(defaultConfiguration.ledger, { key: 'a.rupee', content });
+
+		expect(parsed.failed).toEqual([]);
+		expect(
+			print(defaultConfiguration.ledger, { ...ledger(parsed.succeeded), prices: parsed.prices }),
+		).toBe(content);
 	});
 
 	it('follows the configuration', () => {
@@ -254,6 +302,7 @@ describe('viewing a transaction', () => {
 				amount: amount('10'),
 				commodity: 'INFY',
 				price: { kind: PriceKind.Unit, amount: amount('1500.125'), commodity: 'INR' },
+				cost: null,
 				balance: null,
 				metadata: {},
 			},
@@ -262,6 +311,7 @@ describe('viewing a transaction', () => {
 				amount: amount('-15001.25'),
 				commodity: 'INR',
 				price: null,
+				cost: null,
 				balance: null,
 				metadata: {},
 			},
@@ -276,8 +326,8 @@ describe('viewing a transaction', () => {
 			time: '18:45',
 			description: 'Bought shares',
 			postings: [
-				{ account: 'Assets:Broker', amount: '10.00 INFY', price: '@ 1500.125' },
-				{ account: 'Assets:Bank', amount: '-15001.25', price: null },
+				{ account: 'Assets:Broker', quantity: '10.00 INFY @ 1500.125' },
+				{ account: 'Assets:Bank', quantity: '-15001.25' },
 			],
 		});
 	});
@@ -290,7 +340,7 @@ describe('viewing a transaction', () => {
 				{ ...first!, price: { kind: PriceKind.Total, amount: amount('5'), commodity: 'USD' } },
 			],
 		};
-		expect(viewTransaction(priced).postings[0]?.price).toBe('@@ 5.00 USD');
+		expect(viewTransaction(priced).postings[0]?.quantity).toBe('10.00 INFY @@ 5.00 USD');
 	});
 
 	it('leaves an untimed transaction without a time', () => {

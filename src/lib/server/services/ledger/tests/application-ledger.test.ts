@@ -2,8 +2,11 @@ import type { Database } from '#lib/server/db/index.ts';
 import {
 	EMBEDDING_DIMENSIONS,
 	ledgerFiles,
+	lots,
 	memberships,
 	metadata,
+	prices,
+	PriceSource,
 	transactions,
 } from '#lib/server/db/schema.ts';
 import { provide } from '#lib/server/shared/context/context.ts';
@@ -116,6 +119,61 @@ describe('syncing the ledger', () => {
 			await stored(storage, ledger).delete('a.rupee');
 			await Ledger.sync(ledger);
 			expect(await db.$count(metadata)).toBe(before);
+		}));
+
+	it('indexes market prices, replacing them when the file changes', ({ context, db, storage }) =>
+		provide(context, async () => {
+			const ledger = await createLedger(db);
+			const bought = '2026-10-01 Buy INFY\n\tAssets:Zerodha 10 INFY @ 1500\n\tAssets:Bank\n';
+			const indexed = () =>
+				db
+					.select({
+						commodity: prices.commodity,
+						amount: prices.priceAmount,
+						source: prices.source,
+					})
+					.from(prices)
+					.where(eq(prices.ledgerId, ledger.id))
+					.orderBy(asc(prices.line));
+
+			await put(storage, ledger, 'a.rupee', `${bought}\nP 2026-10-17 INFY 1820\n`);
+			await Ledger.sync(ledger);
+			expect(await indexed()).toEqual([
+				{ commodity: 'INFY', amount: 1_500_000_000n, source: PriceSource.Posting },
+				{ commodity: 'INFY', amount: 1_820_000_000n, source: PriceSource.Line },
+			]);
+
+			await put(storage, ledger, 'a.rupee', 'P 2026-10-18 INFY 1830\nP 2026-10-18 TCS 4100\n');
+			await Ledger.sync(ledger);
+			expect(await indexed()).toEqual([
+				{ commodity: 'INFY', amount: 1_830_000_000n, source: PriceSource.Line },
+				{ commodity: 'TCS', amount: 4_100_000_000n, source: PriceSource.Line },
+			]);
+		}));
+
+	it('indexes a lot cost and reads it back', ({ context, db, storage }) =>
+		provide(context, async () => {
+			const ledger = await createLedger(db);
+			const sale = [
+				'2026-10-01 Sell INFY',
+				'\tAssets:Zerodha -4 INFY {1500, 2024-06-03} @ 1700',
+				'\tAssets:Bank 6800',
+				'\tIncome:Gains',
+				'',
+			].join('\n');
+			await put(storage, ledger, 'a.rupee', sale);
+			await Ledger.sync(ledger);
+
+			const [indexed] = (await index(ledger.id).transactions())._unsafeUnwrap();
+			expect(indexed?.postings.map((p) => p.cost)).toEqual([
+				{
+					amount: 1_500_000_000n,
+					commodity: 'INR',
+					date: Temporal.PlainDate.from('2024-06-03'),
+				},
+				null,
+				null,
+			]);
 		}));
 
 	it('re-indexes changed files and drops deleted ones', ({ context, db, storage }) =>
@@ -676,5 +734,227 @@ describe('changing an event', () => {
 			);
 			expect(await Ledger.sync(ledger)).toEqual(ok([]));
 			expect(await counted(ledger)).toEqual(['NEFT TO INTERACTIVE BROKERS']);
+		}));
+});
+
+describe('lots', () => {
+	const bought = ['2024-01-02 Buy', '\tAssets:Zerodha 10 INFY @ 1500', '\tAssets:Bank', ''].join(
+		'\n',
+	);
+
+	const sold = (posting: string) =>
+		['2025-03-01 Sell', posting, '\tAssets:Bank 6800', '\tIncome:Gains', ''].join('\n');
+
+	const held = (db: Database, ledgerId: string) =>
+		db
+			.select({ account: lots.account, remaining: lots.remaining, origin: lots.origin })
+			.from(lots)
+			.where(eq(lots.ledgerId, ledgerId))
+			.orderBy(asc(lots.date), asc(lots.account));
+
+	it('books lots across files, and what a sale takes from them', ({ context, db }) =>
+		provide(context, async () => {
+			const ledger = await createLedger(db);
+			await Ledger.createFile({ ledger, key: 'a.rupee', content: bought });
+			await Ledger.createFile({
+				ledger,
+				key: 'b.rupee',
+				content: sold('\tAssets:Zerodha -4 INFY {1500} @ 1700'),
+			});
+
+			expect(await Ledger.sync(ledger)).toEqual(ok([]));
+			expect(await held(db, ledger.id)).toEqual([
+				{ account: 'Assets:Zerodha', remaining: 6_000_000n, origin: 'buy' },
+			]);
+		}));
+
+	it('books again when only the file with the buy changes', ({ context, db }) =>
+		provide(context, async () => {
+			const ledger = await createLedger(db);
+			await Ledger.createFile({ ledger, key: 'a.rupee', content: bought });
+			await Ledger.createFile({
+				ledger,
+				key: 'b.rupee',
+				content: sold('\tAssets:Zerodha -4 INFY {1500} @ 1700'),
+			});
+
+			const file = (await Ledger.getFile(ledger, 'a.rupee'))._unsafeUnwrap();
+			await Ledger.editFile({
+				ledger,
+				key: 'a.rupee',
+				content: bought.replace('@ 1500', '@ 1400'),
+				version: file.version,
+			});
+
+			expect(await Ledger.sync(ledger)).toEqual(
+				ok([
+					{
+						type: 'LotNotOpen',
+						location: 'b.rupee:1',
+						account: 'Assets:Zerodha',
+						units: '4.00 INFY',
+					},
+				]),
+			);
+		}));
+
+	it('reports a sale that names no lot, and a named lot that went with its file', ({
+		context,
+		db,
+	}) =>
+		provide(context, async () => {
+			const ledger = await createLedger(db);
+			await Ledger.createFile({ ledger, key: 'a.rupee', content: bought });
+			await Ledger.createFile({
+				ledger,
+				key: 'b.rupee',
+				content: sold('\tAssets:Zerodha -4 INFY @ 1700'),
+			});
+			await Ledger.createFile({
+				ledger,
+				key: 'c.rupee',
+				content: sold('\tAssets:Zerodha -4 INFY {1500} @ 1700'),
+			});
+			expect((await Ledger.sync(ledger))._unsafeUnwrap()).toEqual([
+				{ type: 'LotCostMissing', location: 'b.rupee:1', account: 'Assets:Zerodha' },
+			]);
+
+			await Ledger.deleteFile(ledger, 'a.rupee');
+			expect((await Ledger.sync(ledger))._unsafeUnwrap()).toEqual([
+				{
+					type: 'LotNotOpen',
+					location: 'c.rupee:1',
+					account: 'Assets:Zerodha',
+					units: '4.00 INFY',
+				},
+			]);
+		}));
+
+	it('opens no lot for a buy that is evidence of another', ({ context, db }) =>
+		provide(context, async () => {
+			const ledger = await createLedger(db);
+			const buy = (role: string) =>
+				bought.replace('Buy\n', `Buy\n\t- ${role}: 2024-01-02-infy-otter\n`);
+			await Ledger.createFile({ ledger, key: 'a.rupee', content: buy('event') });
+			await Ledger.createFile({ ledger, key: 'b.rupee', content: buy('same-as') });
+
+			expect(await Ledger.sync(ledger)).toEqual(ok([]));
+			expect(await held(db, ledger.id)).toHaveLength(1);
+		}));
+});
+
+describe('accounts', () => {
+	const day = Temporal.PlainDate.from('2026-10-17');
+
+	it('values what each account holds at its latest price, a P line first', ({ context, db }) =>
+		provide(context, async () => {
+			const ledger = await createLedger(db);
+			const content = [
+				'2026-01-02 Buy',
+				'\tAssets:Zerodha 10 INFY @ 1500',
+				'\tAssets:Bank',
+				'',
+				'2026-03-01 Sell',
+				'\tAssets:Zerodha -4 INFY {1500} @ 1700',
+				'\tAssets:Bank 6800',
+				'\tIncome:Gains -800',
+				'',
+				'2026-04-01 Bonus',
+				'\tAssets:Zerodha 1 TCS',
+				'\tIncome:Bonus -1 TCS',
+				'',
+				'2026-10-01 Buy',
+				'\tAssets:Zerodha 1 INFY @ 1900',
+				'\tAssets:Bank',
+				'',
+				'P 2026-10-01 INFY 1800',
+				'P 2026-10-20 INFY 2000',
+				'',
+			].join('\n');
+			await Ledger.createFile({ ledger, key: 'a.rupee', content });
+
+			const accounts = (await Ledger.getAccounts(ledger, day))._unsafeUnwrap().succeeded;
+			expect(accounts.map((a) => [a.account, a.total, a.unpriced])).toEqual([
+				['Assets', 2500_000_000n, 1],
+				['Assets:Bank', -10100_000_000n, 0],
+				['Assets:Zerodha', 12600_000_000n, 1],
+			]);
+			expect(accounts[2]?.holdings).toMatchObject([
+				{
+					commodity: 'INFY',
+					units: 7_000_000n,
+					cost: { amount: 10900_000_000n, commodity: 'INR' },
+					price: { amount: 1800_000_000n, commodity: 'INR' },
+					gain: 1700_000_000n,
+				},
+				{ commodity: 'TCS', units: 1_000_000n, value: null },
+			]);
+		}));
+
+	it('values shares priced in dollars at the price of a dollar', ({ context, db }) =>
+		provide(context, async () => {
+			const ledger = await createLedger(db);
+			const content = [
+				'2026-10-01 Fund',
+				'\tAssets:IBKR 1000 USD @ 83',
+				'\tAssets:HDFC',
+				'',
+				'2026-10-02 Buy',
+				'\tAssets:IBKR 2 AAPL @ 200 USD',
+				'\tAssets:IBKR -400 USD',
+				'',
+				'P 2026-10-03 AAPL 250 USD',
+				'',
+			].join('\n');
+			await Ledger.createFile({ ledger, key: 'ibkr.rupee', content });
+
+			const accounts = (await Ledger.getAccounts(ledger, day))._unsafeUnwrap().succeeded;
+			expect(accounts.find((a) => a.account === 'Assets:IBKR')?.holdings).toMatchObject([
+				{ commodity: 'AAPL', value: 41500_000_000n, gain: 8300_000_000n },
+				{ commodity: 'USD', value: 49800_000_000n, gain: null },
+			]);
+		}));
+
+	it('lists the lots an account held, with what each disposal realised', ({ context, db }) =>
+		provide(context, async () => {
+			const ledger = await createLedger(db);
+			const content = [
+				'2026-01-02 Buy',
+				'\tAssets:Zerodha 10 INFY @ 1500',
+				'\tAssets:Bank',
+				'',
+				'2026-03-01 Sell',
+				'\tAssets:Zerodha -4 INFY {1500} @ 1700',
+				'\tAssets:Bank 6800',
+				'\tIncome:Gains -800',
+				'',
+				'2026-04-01 Move',
+				'\tAssets:Zerodha -6 INFY',
+				'\tAssets:Groww 6 INFY',
+				'',
+			].join('\n');
+			await Ledger.createFile({ ledger, key: 'a.rupee', content });
+
+			const zerodha = (await Ledger.getLots(ledger, 'Assets:Zerodha', 'INFY'))._unsafeUnwrap();
+			expect(zerodha.succeeded).toMatchObject([
+				{
+					location: { file: 'a.rupee', line: 1 },
+					origin: 'buy',
+					remaining: 0n,
+					disposals: [
+						{
+							kind: 'sale',
+							units: -4_000_000n,
+							gain: { amount: 800_000_000n, commodity: 'INR' },
+						},
+						{ kind: 'transfer', units: -6_000_000n, price: null, gain: null },
+					],
+				},
+			]);
+
+			const groww = (await Ledger.getLots(ledger, 'Assets:Groww', 'INFY'))._unsafeUnwrap();
+			expect(groww.succeeded).toMatchObject([
+				{ origin: 'transfer', from: 'Assets:Zerodha', remaining: 6_000_000n, disposals: [] },
+			]);
 		}));
 });

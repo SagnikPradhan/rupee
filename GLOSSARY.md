@@ -32,8 +32,8 @@ What an amount is counted in: a currency, a share or a fund unit. An amount with
 _Avoid_: Currency (one kind of commodity), asset, symbol
 
 **Price**:
-What a posting in one commodity cost in another, per unit or in total. A transaction balances at its prices, each commodity on its own.
-_Avoid_: Rate, cost basis (that belongs to lots, which are not modelled yet)
+What a commodity is worth in another, per unit or in total: written on a posting, or as a `P` line for a market price. A transaction balances at its prices, each commodity on its own, except where a posting names a lot cost.
+_Avoid_: Rate, cost basis (that is a lot cost)
 
 **Balance account**:
 An Assets or Liabilities account, where real money sits.
@@ -52,6 +52,32 @@ An Income or Expenses account, describing what money was for rather than where i
 **Metadata**:
 A `key: value` fact attached to a ledger file, transaction or posting. Any key is allowed; the system acts only on keys it understands.
 _Avoid_: Tag (a tag is one kind of metadata value), annotation, attribute
+
+## Investments
+
+**Lot**:
+A batch of a commodity a balance account gained at one time, with what each unit cost. A buy's price is its cost.
+_Avoid_: Tax lot, position, tranche
+
+**Lot cost**:
+The `{cost}` or `{cost, date}` a posting writes to name the lot it takes units from. A sale must name one; a transfer or gift may.
+_Avoid_: Cost basis, book value
+
+**Holding**:
+Everything one account holds of one commodity, made up of its lots.
+_Avoid_: Position, investment
+
+**Disposal**:
+Units taken out of a lot by a sale, a transfer, a gift or a buy covering a short. A sale's disposal has a gain; the others have none.
+_Avoid_: Sale (only one kind), reduction, closing
+
+**Sale**:
+A posting taking units out of a holding against another commodity, balanced at its lot cost with the gain written beside it.
+_Avoid_: Sell, redemption
+
+**Transfer**:
+A posting taking units out of a holding against the same commodity into another balance account; the lots move with their date and cost.
+_Avoid_: Move
 
 ## Storage and access
 

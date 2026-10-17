@@ -19,6 +19,7 @@ const member = (
 		amount: parseAmount(amount) as Amount,
 		commodity: 'INR',
 		price: null,
+		cost: null,
 		balance: null,
 		metadata: {},
 	})),

@@ -61,6 +61,7 @@ const transaction = (description: string, postings: [string, bigint][], date = '
 			amount: amount(n),
 			commodity: 'INR',
 			price: null,
+			cost: null,
 			balance: null,
 			metadata: {},
 		})),

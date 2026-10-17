@@ -1,6 +1,12 @@
-import { AccountType, PriceKind } from '#lib/server/db/schema.ts';
+import {
+	AccountType,
+	DisposalKind,
+	LotOrigin,
+	PriceKind,
+	PriceSource,
+} from '#lib/server/db/schema.ts';
 
-export { AccountType, PriceKind };
+export { AccountType, DisposalKind, LotOrigin, PriceKind, PriceSource };
 
 // `owner` is the user whose storage holds the ledger.
 export type Ledger = { id: string; handle: string; name: string; owner: string };
@@ -14,6 +20,7 @@ export type RupeeFile = {
 };
 
 export const AMOUNT_SCALE = 6;
+export const AMOUNT_UNIT = 10n ** BigInt(AMOUNT_SCALE);
 
 // Millionths of a unit (`1250.5` is `1_250_500_000n`); only `parseAmount` makes one.
 export type Amount = bigint & { readonly brand: unique symbol };
@@ -34,14 +41,23 @@ export const toMetadata = (entries: [string, string][]): RupeeMetadata =>
 // What a bare amount is in.
 export const DEFAULT_COMMODITY = 'INR';
 
+/** ISO 4217 codes, which are held as money rather than in lots. */
+export const CURRENCIES = Intl.supportedValuesOf('currency');
+
+// Currencies are money, so they have no lots.
+export const hasLots = (c: string) => !CURRENCIES.includes(c);
+
 export type Quantity = { amount: Amount; commodity: string };
 export type Price = Quantity & { kind: PriceKind };
+// Names a lot by what one unit cost, and the day it was bought when the cost alone is ambiguous.
+export type LotCost = Quantity & { date: Temporal.PlainDate | null };
 
 export type RupeePosting = {
 	account: string;
 	amount: Amount;
 	commodity: string;
 	price: Price | null;
+	cost: LotCost | null;
 	// What the account holds of the posting's commodity after it, if the file asserts it.
 	balance: Amount | null;
 	metadata: RupeeMetadata;
@@ -56,9 +72,17 @@ export type RupeeTransaction = {
 	postings: RupeePosting[];
 };
 
+export type RupeeMarketPrice = {
+	location: RupeeParseLocation;
+	date: Temporal.PlainDate;
+	commodity: string;
+	price: Quantity;
+};
+
 export type RupeeLedgerFile = {
 	metadata: RupeeMetadata;
 	transactions: RupeeTransaction[];
+	prices: RupeeMarketPrice[];
 };
 
 export const formatAmount = (amount: Amount): string => {
@@ -71,8 +95,12 @@ export const formatAmount = (amount: Amount): string => {
 export const formatQuantity = ({ amount, commodity }: Quantity): string =>
 	commodity === DEFAULT_COMMODITY ? formatAmount(amount) : `${formatAmount(amount)} ${commodity}`;
 
-// What a posting weighs in balancing: its price if it has one, else itself.
-export const weight = (p: Pick<RupeePosting, 'amount' | 'commodity' | 'price'>): Quantity => {
+// What a posting weighs in balancing: its lot cost, else its price, else itself.
+export const weight = (
+	p: Pick<RupeePosting, 'amount' | 'commodity' | 'price' | 'cost'>,
+): Quantity => {
+	if (p.cost !== null)
+		return { amount: multiply(p.amount, p.cost.amount), commodity: p.cost.commodity };
 	if (p.price === null) return { amount: p.amount, commodity: p.commodity };
 	if (p.price.kind === PriceKind.Total)
 		return {
@@ -84,12 +112,19 @@ export const weight = (p: Pick<RupeePosting, 'amount' | 'commodity' | 'price'>):
 };
 
 // Rounds half away from zero, back to the amount scale.
-const multiply = (a: Amount, b: Amount): Amount => {
-	const scale = 10n ** BigInt(AMOUNT_SCALE);
+export const multiply = (a: Amount, b: Amount): Amount => {
 	const product = a * b;
-	const half = (product < 0n ? -scale : scale) / 2n;
-	return ((product + half) / scale) as Amount;
+	const half = (product < 0n ? -AMOUNT_UNIT : AMOUNT_UNIT) / 2n;
+	return ((product + half) / AMOUNT_UNIT) as Amount;
 };
+
+// Both are non-negative here; rounds half up, back to the amount scale.
+export const divide = (a: Amount, b: Amount): Amount =>
+	((a * AMOUNT_UNIT * 2n + b) / (2n * b)) as Amount;
+
+export const sum = (a: Amount[]): Amount => a.reduce((t, x) => t + x, 0n) as Amount;
+
+export const min = (a: Amount, b: Amount): Amount => (a < b ? a : b);
 
 export const accountType = (a: string): AccountType | null =>
 	Object.values(AccountType).find((r) => r === a.split(':')[0]) ?? null;

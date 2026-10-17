@@ -8,6 +8,13 @@
       "when": 1792256607230,
       "tag": "0000_baseline",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1792261032489,
+      "tag": "0001_investments",
+      "breakpoints": true
     }
   ]
 }
