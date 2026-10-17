@@ -29,7 +29,7 @@ export const marketPrices = (file: RupeeLedgerFile) => [
 	),
 ];
 
-const unitPrice = (p: Pick<RupeePosting, 'amount' | 'price'>): Quantity | null => {
+export const unitPrice = (p: Pick<RupeePosting, 'amount' | 'price'>): Quantity | null => {
 	if (p.price === null || p.amount === 0n) return null;
 	if (p.price.kind === PriceKind.Unit)
 		return { amount: p.price.amount, commodity: p.price.commodity };

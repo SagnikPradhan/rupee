@@ -34,6 +34,24 @@ export enum PriceSource {
 
 export const priceSource = PG.pgEnum('price_source', PriceSource);
 
+export enum LotOrigin {
+	Buy = 'buy',
+	Transfer = 'transfer',
+	Short = 'short',
+	Unpriced = 'unpriced',
+}
+
+export const lotOrigin = PG.pgEnum('lot_origin', LotOrigin);
+
+export enum DisposalKind {
+	Sale = 'sale',
+	Transfer = 'transfer',
+	Gift = 'gift',
+	Cover = 'cover',
+}
+
+export const disposalKind = PG.pgEnum('disposal_kind', DisposalKind);
+
 export enum AccountType {
 	Assets = 'Assets',
 	Liabilities = 'Liabilities',
@@ -223,6 +241,7 @@ export const postings = PG.pgTable(
 	(t) => [
 		PG.index('postings_transaction_id').on(t.transactionId),
 		PG.index('postings_ledger_id_account_amount').on(t.ledgerId, t.account, t.commodity, t.amount), // refinement matches
+		PG.index('postings_ledger_id_commodity').on(t.ledgerId, t.commodity), // lots are booked per commodity
 		PG.index('postings_ledger_id_balance')
 			.on(t.ledgerId, t.account, t.commodity)
 			.where(sql`${t.balance} IS NOT NULL`),
@@ -251,6 +270,64 @@ export const prices = PG.pgTable(
 	(t) => [
 		PG.index('prices_file_id').on(t.fileId),
 		PG.index('prices_ledger_id_commodity_date').on(t.ledgerId, t.commodity, t.date),
+	],
+);
+
+export const lots = PG.pgTable(
+	'lots',
+	(t) => ({
+		...base,
+		ledgerId: t
+			.uuid()
+			.notNull()
+			.references(() => ledgers.id, { onDelete: 'cascade' }),
+		postingId: t
+			.uuid()
+			.notNull()
+			.references(() => postings.id, { onDelete: 'cascade' }),
+		sourceId: t.uuid().references((): PG.AnyPgColumn => lots.id, { onDelete: 'set null' }), // the lot a transfer moved
+		account: t.text().notNull(),
+		commodity: t.text().notNull(),
+		origin: lotOrigin().notNull(),
+		date: t.date().notNull(),
+		units: t.bigint({ mode: 'bigint' }).notNull(), // signed millionths; negative for a short
+		remaining: t.bigint({ mode: 'bigint' }).notNull(),
+		costAmount: t.bigint({ mode: 'bigint' }).notNull(), // of one unit
+		costCommodity: t.text().notNull(),
+	}),
+	(t) => [
+		PG.index('lots_ledger_id_account_commodity').on(t.ledgerId, t.account, t.commodity),
+		PG.index('lots_ledger_id_commodity').on(t.ledgerId, t.commodity),
+		PG.index('lots_posting_id').on(t.postingId),
+	],
+);
+
+export const disposals = PG.pgTable(
+	'disposals',
+	(t) => ({
+		...base,
+		ledgerId: t
+			.uuid()
+			.notNull()
+			.references(() => ledgers.id, { onDelete: 'cascade' }),
+		lotId: t.uuid().references(() => lots.id, { onDelete: 'cascade' }), // none when no open lot covers it
+		postingId: t
+			.uuid()
+			.notNull()
+			.references(() => postings.id, { onDelete: 'cascade' }),
+		commodity: t.text().notNull(),
+		kind: disposalKind().notNull(),
+		units: t.bigint({ mode: 'bigint' }).notNull(), // what the lot changes by, signed millionths
+		priceAmount: t.bigint({ mode: 'bigint' }), // of one unit; with its commodity, all or none
+		priceCommodity: t.text(),
+	}),
+	(t) => [
+		PG.index('disposals_lot_id').on(t.lotId),
+		PG.index('disposals_posting_id').on(t.postingId),
+		PG.index('disposals_ledger_id_commodity').on(t.ledgerId, t.commodity),
+		PG.index('disposals_ledger_id_unmatched')
+			.on(t.ledgerId)
+			.where(sql`${t.lotId} IS NULL`),
 	],
 );
 

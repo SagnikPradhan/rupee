@@ -544,6 +544,10 @@ describe('lot costs', () => {
 		expect(t?.postings[0]).toEqual(sold(rupees('1500', '2024-06-03')));
 	});
 
+	it('balances in units when the commodity moves in kind, the lot cost only picking a lot', () => {
+		expect(sell(['\tAssets:Zerodha -4 INFY {1500}', '\tExpenses:Gifts 4 INFY']).failed).toEqual([]);
+	});
+
 	it('takes a lot cost in another commodity', () => {
 		const [t] = sell(['\tAssets:IBKR -4 AAPL {180 usd}', '\tAssets:IBKR:Cash']).succeeded;
 		expect(t?.postings[0]?.cost).toEqual({ ...rupees('180'), commodity: 'USD' });

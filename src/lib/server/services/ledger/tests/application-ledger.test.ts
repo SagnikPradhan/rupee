@@ -2,6 +2,7 @@ import type { Database } from '#lib/server/db/index.ts';
 import {
 	EMBEDDING_DIMENSIONS,
 	ledgerFiles,
+	lots,
 	memberships,
 	metadata,
 	prices,
@@ -585,13 +586,14 @@ describe('balance assertions', () => {
 			const ledger = await createLedger(db);
 			const ibkr = (aapl: string) =>
 				[
-					'2026-10-01 Fund',
-					'\tAssets:IBKR 1000 USD @ 83',
+					'2026-10-01 Buy',
+					'\tAssets:IBKR 1 MSFT @ 30000',
 					'\tAssets:HDFC',
 					'',
 					'2026-10-02 Buy',
-					`\tAssets:IBKR 2 AAPL @ 200 USD = ${aapl} AAPL`,
-					'\tAssets:IBKR -400 USD = 600 USD',
+					`\tAssets:IBKR 2 AAPL @ 16000 = ${aapl} AAPL`,
+					'\tAssets:IBKR 1 MSFT @ 31000 = 2 MSFT',
+					'\tAssets:HDFC',
 					'',
 				].join('\n');
 			await Ledger.createFile({ ledger, key: 'ibkr.rupee', content: ibkr('2') });
@@ -733,5 +735,111 @@ describe('changing an event', () => {
 			);
 			expect(await Ledger.sync(ledger)).toEqual(ok([]));
 			expect(await counted(ledger)).toEqual(['NEFT TO INTERACTIVE BROKERS']);
+		}));
+});
+
+describe('lots', () => {
+	const bought = ['2024-01-02 Buy', '\tAssets:Zerodha 10 INFY @ 1500', '\tAssets:Bank', ''].join(
+		'\n',
+	);
+
+	const sold = (posting: string) =>
+		['2025-03-01 Sell', posting, '\tAssets:Bank 6800', '\tIncome:Gains', ''].join('\n');
+
+	const held = (db: Database, ledgerId: string) =>
+		db
+			.select({ account: lots.account, remaining: lots.remaining, origin: lots.origin })
+			.from(lots)
+			.where(eq(lots.ledgerId, ledgerId))
+			.orderBy(asc(lots.date), asc(lots.account));
+
+	it('books lots across files, and what a sale takes from them', ({ context, db }) =>
+		provide(context, async () => {
+			const ledger = await createLedger(db);
+			await Ledger.createFile({ ledger, key: 'a.rupee', content: bought });
+			await Ledger.createFile({
+				ledger,
+				key: 'b.rupee',
+				content: sold('\tAssets:Zerodha -4 INFY {1500} @ 1700'),
+			});
+
+			expect(await Ledger.sync(ledger)).toEqual(ok([]));
+			expect(await held(db, ledger.id)).toEqual([
+				{ account: 'Assets:Zerodha', remaining: 6_000_000n, origin: 'buy' },
+			]);
+		}));
+
+	it('books again when only the file with the buy changes', ({ context, db }) =>
+		provide(context, async () => {
+			const ledger = await createLedger(db);
+			await Ledger.createFile({ ledger, key: 'a.rupee', content: bought });
+			await Ledger.createFile({
+				ledger,
+				key: 'b.rupee',
+				content: sold('\tAssets:Zerodha -4 INFY {1500} @ 1700'),
+			});
+
+			const file = (await Ledger.getFile(ledger, 'a.rupee'))._unsafeUnwrap();
+			await Ledger.editFile({
+				ledger,
+				key: 'a.rupee',
+				content: bought.replace('@ 1500', '@ 1400'),
+				version: file.version,
+			});
+
+			expect(await Ledger.sync(ledger)).toEqual(
+				ok([
+					{
+						type: 'LotNotOpen',
+						location: 'b.rupee:1',
+						account: 'Assets:Zerodha',
+						units: '4.00 INFY',
+					},
+				]),
+			);
+		}));
+
+	it('reports a sale that names no lot, and a named lot that went with its file', ({
+		context,
+		db,
+	}) =>
+		provide(context, async () => {
+			const ledger = await createLedger(db);
+			await Ledger.createFile({ ledger, key: 'a.rupee', content: bought });
+			await Ledger.createFile({
+				ledger,
+				key: 'b.rupee',
+				content: sold('\tAssets:Zerodha -4 INFY @ 1700'),
+			});
+			await Ledger.createFile({
+				ledger,
+				key: 'c.rupee',
+				content: sold('\tAssets:Zerodha -4 INFY {1500} @ 1700'),
+			});
+			expect((await Ledger.sync(ledger))._unsafeUnwrap()).toEqual([
+				{ type: 'LotCostMissing', location: 'b.rupee:1', account: 'Assets:Zerodha' },
+			]);
+
+			await Ledger.deleteFile(ledger, 'a.rupee');
+			expect((await Ledger.sync(ledger))._unsafeUnwrap()).toEqual([
+				{
+					type: 'LotNotOpen',
+					location: 'c.rupee:1',
+					account: 'Assets:Zerodha',
+					units: '4.00 INFY',
+				},
+			]);
+		}));
+
+	it('opens no lot for a buy that is evidence of another', ({ context, db }) =>
+		provide(context, async () => {
+			const ledger = await createLedger(db);
+			const buy = (role: string) =>
+				bought.replace('Buy\n', `Buy\n\t- ${role}: 2024-01-02-infy-otter\n`);
+			await Ledger.createFile({ ledger, key: 'a.rupee', content: buy('event') });
+			await Ledger.createFile({ ledger, key: 'b.rupee', content: buy('same-as') });
+
+			expect(await Ledger.sync(ledger)).toEqual(ok([]));
+			expect(await held(db, ledger.id)).toHaveLength(1);
 		}));
 });

@@ -1,6 +1,12 @@
-import { AccountType, PriceKind, PriceSource } from '#lib/server/db/schema.ts';
+import {
+	AccountType,
+	DisposalKind,
+	LotOrigin,
+	PriceKind,
+	PriceSource,
+} from '#lib/server/db/schema.ts';
 
-export { AccountType, PriceKind, PriceSource };
+export { AccountType, DisposalKind, LotOrigin, PriceKind, PriceSource };
 
 // `owner` is the user whose storage holds the ledger.
 export type Ledger = { id: string; handle: string; name: string; owner: string };

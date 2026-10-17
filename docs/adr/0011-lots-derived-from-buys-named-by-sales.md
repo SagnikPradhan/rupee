@@ -13,11 +13,11 @@ A sale names the lot it takes from with a **lot cost**, and states its gain:
 
 A posting with a lot cost weighs its cost, not its price, so the transaction only balances when the gain is right. `{1500}` takes the oldest open lot with that cost; `{1500, 2024-06-03}` picks one by date. The `@` is optional and only feeds prices. What a sale names is the truth: Rupee does not check it against FIFO or any other booking rule. A sale is a posting taking units out against another commodity; one without a lot cost, or naming a lot that is not open or not large enough, is a ledger problem.
 
-A transfer or a gift takes units out against the same commodity, so it has no gain to state. It may name a lot; otherwise it takes the oldest. A transfer opens lots in the receiving account that keep their original date and cost. Selling units an account does not hold opens a negative lot at the sale's price, and the buy that covers it names that lot like a sale.
+A transfer or a gift takes units out against the same commodity, so it has no gain to state. It may name a lot; otherwise it takes the oldest. A commodity whose units net to zero in a transaction is moving in kind, so its lot costs do not weigh. A transfer opens lots in the receiving account that keep their original date and cost. Selling units an account does not hold opens a negative lot at the sale's price, and the buy that covers it names that lot like a sale.
 
 Market prices are `P 2026-10-17 INFY 1820` lines, ledger's syntax, alongside every `@` price. The latest on or before a date wins; on the same date a `P` line beats an `@`.
 
-Lots and disposals are kept in the index and rebuilt, on sync, only for the account and commodity pairs whose postings changed.
+Lots and disposals are kept in the index and rebuilt, on every change, for each commodity whose postings changed: a transfer crosses accounts, so a commodity is booked across all of them at once. A sale or move no open lot covers is kept as a disposal from no lot, and reported as a problem.
 
 ## Considered Options
 

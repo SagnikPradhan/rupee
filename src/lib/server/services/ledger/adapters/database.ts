@@ -1,8 +1,10 @@
 import { attemptWrite, violates } from '#lib/server/db/errors.ts';
 import { statementChunks, type Database } from '#lib/server/db/index.ts';
 import {
+	disposals as disposalTable,
 	ledgerFiles,
 	ledgers,
+	lots as lotTable,
 	memberships,
 	metadata as metadataTable,
 	postings,
@@ -14,15 +16,30 @@ import { withContext } from '#lib/server/shared/context/context.ts';
 import { fault, type RupeeError } from '#lib/server/shared/result/error.ts';
 import { attempt, err, errAsync, ok, ResultAsync } from '#lib/server/shared/result/result.ts';
 import { inOrder } from '#lib/server/shared/control.ts';
-import { and, asc, eq, inArray, isNotNull, ne, or, sql, type SQL } from 'drizzle-orm';
+import {
+	and,
+	asc,
+	eq,
+	inArray,
+	isNotNull,
+	isNull,
+	ne,
+	notInArray,
+	or,
+	sql,
+	type SQL,
+} from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import { v7 as uuidv7 } from 'uuid';
 import { BALANCE_TYPES, EVENT_KEYS } from '../domain/events';
+import { book, type BookedPosting, type Booking } from '../domain/lots';
 import { displayLocation } from '../domain/parser';
 import { marketPrices } from '../domain/prices';
 import type { FileVersion } from '../domain/sync';
 import {
 	accountType,
+	DEFAULT_COMMODITY,
+	DisposalKind,
 	PriceKind,
 	toMetadata,
 	type Amount,
@@ -577,6 +594,172 @@ const balanceChecks =
 			),
 		);
 
+// Rupees cost what they are, so they have no lots.
+const lotCommodities =
+	(ledgerId: string) =>
+	(keys: string[]): ResultAsync<string[]> =>
+		withContext('db')((db) =>
+			attempt(() =>
+				db
+					.selectDistinct({ commodity: postings.commodity })
+					.from(postings)
+					.innerJoin(transactionTable, eq(transactionTable.id, postings.transactionId))
+					.innerJoin(ledgerFiles, eq(ledgerFiles.id, transactionTable.fileId))
+					.where(
+						and(
+							eq(postings.ledgerId, ledgerId),
+							inArray(ledgerFiles.key, keys),
+							inArray(postings.accountType, BALANCE_TYPES),
+							ne(postings.commodity, DEFAULT_COMMODITY),
+						),
+					)
+					.then((r) => r.map((c) => c.commodity)),
+			),
+		);
+
+// A commodity's lots are booked again from every counted posting in it, and
+// replace what was there in one transaction.
+const rebook =
+	(ledgerId: string) =>
+	(commodity: string, evidence: string[]): ResultAsync<void> =>
+		withContext('db')((db) =>
+			attempt(() =>
+				db.transaction(async (tx) => {
+					const booking = book(await bookedPostings(tx, { ledgerId, commodity, evidence }));
+					await replaceLots(tx, { ledgerId, commodity }, booking);
+				}),
+			),
+		);
+
+type BookedQuery = { ledgerId: string; commodity: string; evidence: string[] };
+
+const bookedPostings = (db: Database, q: BookedQuery): Promise<BookedPosting[]> =>
+	db
+		.select({
+			id: postings.id,
+			transactionId: postings.transactionId,
+			account: postings.account,
+			accountType: postings.accountType,
+			date: transactionTable.date,
+			amount: postings.amount,
+			priceAmount: postings.priceAmount,
+			priceCommodity: postings.priceCommodity,
+			priceKind: postings.priceKind,
+			costAmount: postings.costAmount,
+			costCommodity: postings.costCommodity,
+			costDate: postings.costDate,
+		})
+		.from(postings)
+		.innerJoin(transactionTable, eq(transactionTable.id, postings.transactionId))
+		.innerJoin(ledgerFiles, eq(ledgerFiles.id, transactionTable.fileId))
+		.where(
+			and(
+				eq(postings.ledgerId, q.ledgerId),
+				eq(postings.commodity, q.commodity),
+				notInArray(transactionTable.id, q.evidence),
+			),
+		)
+		.orderBy(
+			asc(transactionTable.date),
+			sql`${transactionTable.time} asc nulls first`,
+			asc(ledgerFiles.key),
+			asc(transactionTable.line),
+			asc(postings.position),
+		)
+		.then((rows) =>
+			rows.map((r) => ({
+				id: r.id,
+				transaction: r.transactionId,
+				account: r.account,
+				held: BALANCE_TYPES.some((t) => t === r.accountType),
+				date: Temporal.PlainDate.from(r.date),
+				amount: r.amount as Amount,
+				price: toPrice(r),
+				cost: toCost(r),
+			})),
+		);
+
+type LotOwner = { ledgerId: string; commodity: string };
+
+const replaceLots = async (db: Database, o: LotOwner, booking: Booking) => {
+	const stored = booking.lots.map((l) => ({ lot: l, id: uuidv7() }));
+	const idOf = (k: number | null) => (k === null ? null : (stored[k]?.id ?? null));
+
+	const lotRows = stored.map(({ lot, id }) => ({
+		...o,
+		id,
+		postingId: lot.posting,
+		sourceId: idOf(lot.source),
+		account: lot.account,
+		origin: lot.origin,
+		date: lot.date.toString(),
+		units: lot.units,
+		remaining: lot.remaining,
+		costAmount: lot.cost.amount,
+		costCommodity: lot.cost.commodity,
+	}));
+	const disposalRows = booking.disposals.map((d) => ({
+		...o,
+		lotId: idOf(d.lot),
+		postingId: d.posting,
+		kind: d.kind,
+		units: d.units,
+		priceAmount: d.price?.amount ?? null,
+		priceCommodity: d.price?.commodity ?? null,
+	}));
+
+	await db
+		.delete(disposalTable)
+		.where(and(eq(disposalTable.ledgerId, o.ledgerId), eq(disposalTable.commodity, o.commodity)));
+	await db
+		.delete(lotTable)
+		.where(and(eq(lotTable.ledgerId, o.ledgerId), eq(lotTable.commodity, o.commodity)));
+	await inOrder([
+		...statementChunks(lotRows).map((c) => () => db.insert(lotTable).values(c)),
+		...statementChunks(disposalRows).map((c) => () => db.insert(disposalTable).values(c)),
+	]);
+};
+
+export type UnmatchedDisposal = {
+	location: RupeeParseLocation;
+	account: string;
+	commodity: string;
+	kind: DisposalKind;
+	units: Amount;
+	named: boolean;
+};
+
+const unmatched = (ledgerId: string) => (): ResultAsync<UnmatchedDisposal[]> =>
+	withContext('db')((db) =>
+		attempt(() =>
+			db
+				.select({
+					file: ledgerFiles.key,
+					line: transactionTable.line,
+					account: postings.account,
+					commodity: disposalTable.commodity,
+					kind: disposalTable.kind,
+					units: disposalTable.units,
+					costAmount: postings.costAmount,
+				})
+				.from(disposalTable)
+				.innerJoin(postings, eq(postings.id, disposalTable.postingId))
+				.innerJoin(transactionTable, eq(transactionTable.id, postings.transactionId))
+				.innerJoin(ledgerFiles, eq(ledgerFiles.id, transactionTable.fileId))
+				.where(and(eq(disposalTable.ledgerId, ledgerId), isNull(disposalTable.lotId)))
+				.orderBy(asc(ledgerFiles.key), asc(transactionTable.line)),
+		).map((rows) =>
+			rows.map((r) => ({
+				location: { file: r.file, line: r.line },
+				account: r.account,
+				commodity: r.commodity,
+				kind: r.kind,
+				units: r.units as Amount,
+				named: r.costAmount !== null,
+			})),
+		),
+	);
+
 type MetadataRow = { owner: string | null; key: string; value: string };
 
 // Rows come in written order, which `toMetadata` keeps.
@@ -600,6 +783,9 @@ export const index = (ledgerId: string) => ({
 	eventsIn: eventsIn(ledgerId),
 	membersOf: membersOf(ledgerId),
 	balanceChecks: balanceChecks(ledgerId),
+	lotCommodities: lotCommodities(ledgerId),
+	rebook: rebook(ledgerId),
+	unmatched: unmatched(ledgerId),
 	transactions: transactions(ledgerId),
 });
 

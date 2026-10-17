@@ -176,7 +176,9 @@ const isPosting = (l: RupeeLine) => /^(\t| {2})/.test(l.content) && !isBlank(l) 
 
 const isPriceLine = ({ content }: RupeeLine) => /^P\s/.test(content);
 
-// Each commodity sums to zero once priced postings are weighed at their price.
+// Each commodity sums to zero once priced postings are weighed at their price,
+// and postings naming a lot at its cost. A commodity whose units already sum to
+// zero moves in kind, so its lot costs only pick lots.
 // A posting without an amount takes what is left, if that is one commodity.
 const balance = (
 	location: RupeeParseLocation,
@@ -192,7 +194,11 @@ const balance = (
 	const known = written.flatMap((p) =>
 		p.quantity === null ? [] : [{ ...p, quantity: p.quantity }],
 	);
-	const left = residual(known.map((p) => weight(home(p))));
+	const held = known.map(home);
+	const moving = inKind(held);
+	const left = residual(
+		held.map((p) => weight(moving.has(p.commodity) ? { ...p, cost: null } : p)),
+	);
 	if (implicit.length === 0 && left.length > 0) return unbalanced(location, left);
 	if (left.length > 1) return unbalanced(location, left);
 
@@ -220,6 +226,11 @@ const home = (p: KnownPosting) => ({
 	price: p.price,
 	cost: p.cost,
 });
+
+const inKind = (quantities: Quantity[]): Set<string> => {
+	const unbalanced = new Set(residual(quantities).map((q) => q.commodity));
+	return new Set(quantities.map((q) => q.commodity).filter((c) => !unbalanced.has(c)));
+};
 
 const residual = (weights: Quantity[]): Quantity[] =>
 	Object.entries(Object.groupBy(weights, (w) => w.commodity))
