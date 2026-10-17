@@ -38,7 +38,7 @@ import { marketPrices } from '../domain/prices';
 import type { FileVersion } from '../domain/sync';
 import {
 	accountType,
-	DEFAULT_COMMODITY,
+	CURRENCIES,
 	DisposalKind,
 	PriceKind,
 	toMetadata,
@@ -610,7 +610,7 @@ const lotCommodities =
 							eq(postings.ledgerId, ledgerId),
 							inArray(ledgerFiles.key, keys),
 							inArray(postings.accountType, BALANCE_TYPES),
-							ne(postings.commodity, DEFAULT_COMMODITY),
+							notInArray(postings.commodity, CURRENCIES),
 						),
 					)
 					.then((r) => r.map((c) => c.commodity)),

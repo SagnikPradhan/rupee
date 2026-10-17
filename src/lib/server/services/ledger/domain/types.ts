@@ -40,6 +40,9 @@ export const toMetadata = (entries: [string, string][]): RupeeMetadata =>
 // What a bare amount is in.
 export const DEFAULT_COMMODITY = 'INR';
 
+/** ISO 4217 codes, which are held as money rather than in lots. */
+export const CURRENCIES = Intl.supportedValuesOf('currency');
+
 export type Quantity = { amount: Amount; commodity: string };
 export type Price = Quantity & { kind: PriceKind };
 // Names a lot by what one unit cost, and the day it was bought when the cost alone is ambiguous.

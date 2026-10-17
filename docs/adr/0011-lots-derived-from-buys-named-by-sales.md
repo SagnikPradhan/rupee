@@ -30,6 +30,6 @@ Lots and disposals are kept in the index and rebuilt, on every change, for each 
 
 - Every sale carries a lot cost and a gain line, typed by hand until imports and a booking helper write them.
 - A booked sale never changes when history is added; picking a specific lot comes for free.
-- Lots exist only in balance accounts, for every commodity but the home one, including foreign currency.
+- Lots exist only in balance accounts, for every commodity but currencies (ISO 4217 codes). Spending dollars on a US stock needs no lot cost, so the stock's cost stays in dollars and currency gains go untracked. Tracking them later means pricing each foreign buy in rupees on its day, which adds lines to these files but changes none.
 - FIFO for transfers needs a total order, so same-day postings in different files fall back to file key, then line, where balance assertions would call them unordered.
 - Fees stay expenses. Counting them in cost belongs to tax reporting, which can find them in the lot's own transaction.

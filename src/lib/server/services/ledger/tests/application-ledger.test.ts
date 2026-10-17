@@ -586,14 +586,13 @@ describe('balance assertions', () => {
 			const ledger = await createLedger(db);
 			const ibkr = (aapl: string) =>
 				[
-					'2026-10-01 Buy',
-					'\tAssets:IBKR 1 MSFT @ 30000',
+					'2026-10-01 Fund',
+					'\tAssets:IBKR 1000 USD @ 83',
 					'\tAssets:HDFC',
 					'',
 					'2026-10-02 Buy',
-					`\tAssets:IBKR 2 AAPL @ 16000 = ${aapl} AAPL`,
-					'\tAssets:IBKR 1 MSFT @ 31000 = 2 MSFT',
-					'\tAssets:HDFC',
+					`\tAssets:IBKR 2 AAPL @ 200 USD = ${aapl} AAPL`,
+					'\tAssets:IBKR -400 USD = 600 USD',
 					'',
 				].join('\n');
 			await Ledger.createFile({ ledger, key: 'ibkr.rupee', content: ibkr('2') });
