@@ -3,6 +3,7 @@ import * as dateFns from 'date-fns';
 import {
 	formatQuantity,
 	PriceKind,
+	type LotCost,
 	type RupeeLedgerFile,
 	type RupeeMarketPrice,
 	type RupeeMetadata,
@@ -37,21 +38,24 @@ const printTransaction = (
 	].join(' ');
 
 	const outgoing = postings.filter((p) => p.amount < 0n);
-	const plain = postings.every((p) => p.price === null && p.commodity === postings[0]?.commodity);
+	const plain = postings.every(
+		(p) => p.price === null && p.cost === null && p.commodity === postings[0]?.commodity,
+	);
 	const elided = plain && outgoing.length === 1 ? outgoing[0] : undefined;
 
 	return [
 		`${header}\n`,
 		printMetadata('\t', metadata),
-		...postings.map((p) => printPosting(p, p === elided)),
+		...postings.map((p) => printPosting(dateFormats[0], p, p === elided)),
 	].join('');
 };
 
 // Posting metadata sits a level deeper only for the reader; the parser ignores indentation.
-const printPosting = (p: RupeePosting, elided: boolean): string => {
+const printPosting = (f: string | undefined, p: RupeePosting, elided: boolean): string => {
 	const line = [
 		p.account,
 		...(elided ? [] : [formatQuantity(p)]),
+		...(p.cost === null ? [] : [printCost(f, p.cost)]),
 		...(p.price === null ? [] : [PRICE_SIGN[p.price.kind], formatQuantity(p.price)]),
 		...(p.balance === null
 			? []
@@ -59,6 +63,9 @@ const printPosting = (p: RupeePosting, elided: boolean): string => {
 	].join(' ');
 	return `\t${line}\n${printMetadata('\t\t', p.metadata)}`;
 };
+
+const printCost = (f: string | undefined, c: LotCost): string =>
+	`{${[formatQuantity(c), ...(c.date ? [printDate(f, c.date)] : [])].join(', ')}}`;
 
 const printPrice = ({ dateFormats }: LedgerConfiguration, p: RupeeMarketPrice): string =>
 	`P ${printDate(dateFormats[0], p.date)} ${p.commodity} ${formatQuantity(p.price)}\n`;
@@ -74,7 +81,12 @@ const printDate = (f: string | undefined, d: Temporal.PlainDate) =>
 const printTime = (f: string | undefined, t: Temporal.PlainTime) =>
 	f ? dateFns.format(new Date(1970, 0, 1, t.hour, t.minute, t.second), f) : t.toString();
 
-export type PostingView = { account: string; amount: string; price: string | null };
+export type PostingView = {
+	account: string;
+	amount: string;
+	cost: string | null;
+	price: string | null;
+};
 
 export type TransactionView = {
 	file: string;
@@ -98,5 +110,6 @@ export const viewTransaction = (t: RupeeTransaction): TransactionView => ({
 const viewPosting = (p: RupeePosting): PostingView => ({
 	account: p.account,
 	amount: formatQuantity(p),
+	cost: p.cost === null ? null : printCost(undefined, p.cost),
 	price: p.price === null ? null : `${PRICE_SIGN[p.price.kind]} ${formatQuantity(p.price)}`,
 });

@@ -27,6 +27,7 @@ import {
 	toMetadata,
 	type Amount,
 	type Ledger,
+	type LotCost,
 	type Price,
 	type RupeeLedgerFile,
 	type RupeeMetadata,
@@ -102,6 +103,9 @@ const put =
 											priceAmount: posting.price?.amount ?? null,
 											priceCommodity: posting.price?.commodity ?? null,
 											priceKind: posting.price?.kind ?? null,
+											costAmount: posting.cost?.amount ?? null,
+											costCommodity: posting.cost?.commodity ?? null,
+											costDate: posting.cost?.date?.toString() ?? null,
 											balance: posting.balance,
 										},
 									]
@@ -257,6 +261,9 @@ const readIn = async (db: Database, where: SQL | undefined): Promise<IndexedTran
 			priceAmount: postings.priceAmount,
 			priceCommodity: postings.priceCommodity,
 			priceKind: postings.priceKind,
+			costAmount: postings.costAmount,
+			costCommodity: postings.costCommodity,
+			costDate: postings.costDate,
 			balance: postings.balance,
 		})
 		.from(transactionTable)
@@ -307,6 +314,7 @@ const readIn = async (db: Database, where: SQL | undefined): Promise<IndexedTran
 								amount: r.amount as Amount,
 								commodity: r.commodity,
 								price: toPrice(r),
+								cost: toCost(r),
 								balance: r.balance as Amount | null,
 								metadata: owned[r.postingId] ?? {},
 							},
@@ -335,6 +343,21 @@ const toPrice = ({ priceAmount, priceCommodity, priceKind }: PriceColumns): Pric
 				amount: priceAmount as Amount,
 				commodity: priceCommodity,
 				kind: priceKind,
+			};
+
+type CostColumns = {
+	costAmount: bigint | null;
+	costCommodity: string | null;
+	costDate: string | null;
+};
+
+const toCost = ({ costAmount, costCommodity, costDate }: CostColumns): LotCost | null =>
+	costAmount === null || costCommodity === null
+		? null
+		: {
+				amount: costAmount as Amount,
+				commodity: costCommodity,
+				date: costDate === null ? null : Temporal.PlainDate.from(costDate),
 			};
 
 const byIds =

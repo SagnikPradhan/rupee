@@ -36,12 +36,15 @@ export const DEFAULT_COMMODITY = 'INR';
 
 export type Quantity = { amount: Amount; commodity: string };
 export type Price = Quantity & { kind: PriceKind };
+// Names a lot by what one unit cost, and the day it was bought when the cost alone is ambiguous.
+export type LotCost = Quantity & { date: Temporal.PlainDate | null };
 
 export type RupeePosting = {
 	account: string;
 	amount: Amount;
 	commodity: string;
 	price: Price | null;
+	cost: LotCost | null;
 	// What the account holds of the posting's commodity after it, if the file asserts it.
 	balance: Amount | null;
 	metadata: RupeeMetadata;
@@ -79,8 +82,12 @@ export const formatAmount = (amount: Amount): string => {
 export const formatQuantity = ({ amount, commodity }: Quantity): string =>
 	commodity === DEFAULT_COMMODITY ? formatAmount(amount) : `${formatAmount(amount)} ${commodity}`;
 
-// What a posting weighs in balancing: its price if it has one, else itself.
-export const weight = (p: Pick<RupeePosting, 'amount' | 'commodity' | 'price'>): Quantity => {
+// What a posting weighs in balancing: its lot cost, else its price, else itself.
+export const weight = (
+	p: Pick<RupeePosting, 'amount' | 'commodity' | 'price' | 'cost'>,
+): Quantity => {
+	if (p.cost !== null)
+		return { amount: multiply(p.amount, p.cost.amount), commodity: p.cost.commodity };
 	if (p.price === null) return { amount: p.amount, commodity: p.commodity };
 	if (p.price.kind === PriceKind.Total)
 		return {

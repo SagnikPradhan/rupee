@@ -13,6 +13,7 @@ import {
 	toMetadata,
 	weight,
 	type Amount,
+	type LotCost,
 	type Price,
 	type Quantity,
 	type RupeeFile,
@@ -69,6 +70,7 @@ type WrittenPosting = {
 	account: string;
 	quantity: WrittenQuantity | null;
 	price: Price | null;
+	cost: LotCost | null;
 	balance: WrittenQuantity | null;
 };
 
@@ -95,7 +97,10 @@ export const parseTransactions = (
 		const header = parseHeader(configuration, line);
 		if (header.isErr()) return batch([...results, err(header.error)]);
 
-		const body = readBody(takeWhile(lines, (l) => isPosting(l) || isMetadata(l)));
+		const body = readBody(
+			configuration,
+			takeWhile(lines, (l) => isPosting(l) || isMetadata(l)),
+		);
 		results.push(...body.failed.map(err));
 		if (body.failed.length > 0) continue;
 
@@ -114,11 +119,11 @@ export const parseTransactions = (
 type Body = { metadata: RupeeMetadata; postings: MetadataPosting[]; failed: RupeeError[] };
 
 // Metadata belongs to the nearest line above it that is not metadata.
-const readBody = (lines: RupeeLine[]): Body => {
+const readBody = (c: LedgerConfiguration, lines: RupeeLine[]): Body => {
 	const own = readMetadata(takeWhile(lines, isMetadata));
 	// `Array.from` maps as it drains, so each posting takes the metadata under it.
 	const postings = Array.from(drain(lines), (l) => ({
-		posting: parsePosting(l),
+		posting: parsePosting(c, l),
 		metadata: readMetadata(takeWhile(lines, isMetadata)),
 	}));
 
@@ -192,12 +197,12 @@ const balance = (
 	if (left.length > 1) return unbalanced(location, left);
 
 	const [rest = { amount: 0n as Amount, commodity: DEFAULT_COMMODITY }] = left;
-	const postings = written.map(({ account, quantity, price, balance: b, metadata }) => {
+	const postings = written.map(({ account, quantity, price, cost, balance: b, metadata }) => {
 		const filled =
 			quantity === null
 				? { amount: -rest.amount as Amount, commodity: rest.commodity }
 				: { amount: quantity.amount, commodity: quantity.commodity ?? DEFAULT_COMMODITY };
-		return { account, ...filled, price, balance: b, metadata };
+		return { account, ...filled, price, cost, balance: b, metadata };
 	});
 	if (
 		postings.some((p) => p.balance !== null && (p.balance.commodity ?? p.commodity) !== p.commodity)
@@ -213,6 +218,7 @@ const home = (p: KnownPosting) => ({
 	amount: p.quantity.amount,
 	commodity: p.quantity.commodity ?? DEFAULT_COMMODITY,
 	price: p.price,
+	cost: p.cost,
 });
 
 const residual = (weights: Quantity[]): Quantity[] =>
@@ -281,8 +287,8 @@ const parsePriceLine = (
 	});
 };
 
-export const parsePosting = (l: RupeeLine): Result<WrittenPosting> =>
-	readPosting(l).andThen((p) => checkAccount(l.location, p));
+export const parsePosting = (c: LedgerConfiguration, l: RupeeLine): Result<WrittenPosting> =>
+	readPosting(c, l).andThen((p) => checkAccount(l.location, p));
 
 const checkAccount = (
 	location: RupeeParseLocation,
@@ -298,36 +304,57 @@ const checkAccount = (
 	);
 };
 
-// `Account amount [commodity] [@ price | @@ total] [= balance]`.
-const readPosting = ({ location, content }: RupeeLine): Result<WrittenPosting> => {
+// `Account amount [commodity] [{lot cost}] [@ price | @@ total] [= balance]`.
+const readPosting = (
+	{ dateFormats }: LedgerConfiguration,
+	{ location, content }: RupeeLine,
+): Result<WrittenPosting> => {
 	const invalid = err(fault('ParseInvalidPosting', { location: displayLocation(location) }));
-	const parts = /^\s*([^\s=@]+)(?:\s+([^@=]*?))?\s*(?:(@@?)\s*([^=]*?))?\s*(?:=\s*(.*?))?\s*$/.exec(
-		content,
-	);
+	const parts =
+		/^\s*([^\s=@{]+)(?:\s+([^@={]*?))?\s*(?:\{([^}]*)\})?\s*(?:(@@?)\s*([^=]*?))?\s*(?:=\s*(.*?))?\s*$/.exec(
+			content,
+		);
 	if (!parts?.[1]) return invalid;
 
-	const [, account, amount = '', priced, price = '', balance] = parts;
+	const [, account, amount = '', lot, priced, price = '', balance] = parts;
 
 	const quantity = amount === '' ? null : readQuantity(amount);
-	const cost = priced === undefined ? null : readQuantity(price);
+	const cost = lot === undefined ? null : readLotCost(dateFormats, lot);
+	const paid = priced === undefined ? null : readQuantity(price);
 	const asserted = balance === undefined ? null : readQuantity(balance);
-	if (quantity === undefined || cost === undefined || asserted === undefined) return invalid;
-	if (priced !== undefined && (quantity === null || cost === null || cost.amount < 0n))
+	if (quantity === undefined || cost === undefined || paid === undefined || asserted === undefined)
 		return invalid;
+	if (quantity === null && (cost !== null || paid !== null)) return invalid;
+	if (paid && paid.amount < 0n) return invalid;
 
 	return ok({
 		account,
 		quantity,
-		price:
-			cost === null
-				? null
-				: {
-						amount: cost.amount,
-						commodity: cost.commodity ?? DEFAULT_COMMODITY,
-						kind: priced === '@@' ? PriceKind.Total : PriceKind.Unit,
-					},
+		price: paid
+			? {
+					amount: paid.amount,
+					commodity: paid.commodity ?? DEFAULT_COMMODITY,
+					kind: priced === '@@' ? PriceKind.Total : PriceKind.Unit,
+				}
+			: null,
+		cost,
 		balance: asserted,
 	});
+};
+
+// `cost [commodity][, date]`, the date in a configured format.
+const readLotCost = (formats: string[], text: string): LotCost | undefined => {
+	const [, written = '', day] = /^(.*?)(?:,\s+(.*))?$/.exec(text.trim()) ?? [];
+	const cost = readQuantity(written);
+	const date = day === undefined ? null : readDate(formats, day);
+	if (cost === undefined || cost.amount < 0n || date === undefined) return undefined;
+
+	return { amount: cost.amount, commodity: cost.commodity ?? DEFAULT_COMMODITY, date };
+};
+
+const readDate = (formats: string[], text: string): Temporal.PlainDate | undefined => {
+	const date = readWords(formats, text.trim().split(/\s+/), parseDate);
+	return date?.rest.length === 0 ? date.value : undefined;
 };
 
 // An amount, and optionally its commodity after it; `undefined` if it is neither.

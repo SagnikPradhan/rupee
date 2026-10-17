@@ -302,7 +302,9 @@ fields:
 										{#each transaction.postings as posting, index (index)}
 											<div>
 												{posting.account}
-												{posting.amount}{posting.price ? ` ${posting.price}` : ''}
+												{posting.amount}{posting.cost ? ` ${posting.cost}` : ''}{posting.price
+													? ` ${posting.price}`
+													: ''}
 											</div>
 										{/each}
 									</td>

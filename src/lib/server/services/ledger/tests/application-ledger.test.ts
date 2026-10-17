@@ -150,6 +150,31 @@ describe('syncing the ledger', () => {
 			]);
 		}));
 
+	it('indexes a lot cost and reads it back', ({ context, db, storage }) =>
+		provide(context, async () => {
+			const ledger = await createLedger(db);
+			const sale = [
+				'2026-10-01 Sell INFY',
+				'\tAssets:Zerodha -4 INFY {1500, 2024-06-03} @ 1700',
+				'\tAssets:Bank 6800',
+				'\tIncome:Gains',
+				'',
+			].join('\n');
+			await put(storage, ledger, 'a.rupee', sale);
+			await Ledger.sync(ledger);
+
+			const [indexed] = (await index(ledger.id).transactions())._unsafeUnwrap();
+			expect(indexed?.postings.map((p) => p.cost)).toEqual([
+				{
+					amount: 1_500_000_000n,
+					commodity: 'INR',
+					date: Temporal.PlainDate.from('2024-06-03'),
+				},
+				null,
+				null,
+			]);
+		}));
+
 	it('re-indexes changed files and drops deleted ones', ({ context, db, storage }) =>
 		provide(context, async () => {
 			const ledger = await createLedger(db);

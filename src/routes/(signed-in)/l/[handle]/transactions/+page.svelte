@@ -51,7 +51,12 @@
 				<td>{transaction.description}{transaction.counted ? '' : ' (evidence, not counted)'}</td>
 				<td>
 					{#each transaction.postings as posting, index (index)}
-						<div>{posting.account} {posting.amount}{posting.price ? ` ${posting.price}` : ''}</div>
+						<div>
+							{posting.account}
+							{posting.amount}{posting.cost ? ` ${posting.cost}` : ''}{posting.price
+								? ` ${posting.price}`
+								: ''}
+						</div>
 					{/each}
 				</td>
 				<td>{transaction.file}:{transaction.line}</td>

@@ -1,5 +1,5 @@
 {
-  "id": "c9a1aa18-7ac2-4185-b2da-40a9a58206e4",
+  "id": "47c26343-b6b1-4f66-9cd1-bd6063ed6a2f",
   "prevId": "ea06c9d5-f1db-46aa-a7c0-6f5a5cea4001",
   "version": "7",
   "dialect": "postgresql",
@@ -911,6 +911,24 @@
         "price_kind": {
           "name": "price_kind",
           "type": "price_kind",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "cost_amount": {
+          "name": "cost_amount",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "cost_commodity": {
+          "name": "cost_commodity",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "cost_date": {
+          "name": "cost_date",
+          "type": "date",
           "primaryKey": false,
           "notNull": false
         },

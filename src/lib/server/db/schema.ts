@@ -215,6 +215,9 @@ export const postings = PG.pgTable(
 		priceAmount: t.bigint({ mode: 'bigint' }), // price fields: all or none
 		priceCommodity: t.text(),
 		priceKind: priceKind(),
+		costAmount: t.bigint({ mode: 'bigint' }), // lot cost of one unit; with its commodity, all or none
+		costCommodity: t.text(),
+		costDate: t.date(),
 		balance: t.bigint({ mode: 'bigint' }),
 	}),
 	(t) => [

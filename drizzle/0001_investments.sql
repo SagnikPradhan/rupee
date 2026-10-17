@@ -13,6 +13,9 @@ CREATE TABLE "prices" (
 	"source" "price_source" NOT NULL
 );
 --> statement-breakpoint
+ALTER TABLE "postings" ADD COLUMN "cost_amount" bigint;--> statement-breakpoint
+ALTER TABLE "postings" ADD COLUMN "cost_commodity" text;--> statement-breakpoint
+ALTER TABLE "postings" ADD COLUMN "cost_date" date;--> statement-breakpoint
 ALTER TABLE "prices" ADD CONSTRAINT "prices_ledger_id_ledgers_id_fk" FOREIGN KEY ("ledger_id") REFERENCES "public"."ledgers"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "prices" ADD CONSTRAINT "prices_file_id_ledger_files_id_fk" FOREIGN KEY ("file_id") REFERENCES "public"."ledger_files"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 CREATE INDEX "prices_file_id" ON "prices" USING btree ("file_id");--> statement-breakpoint

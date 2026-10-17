@@ -59,7 +59,10 @@
 		<pre>{[
 				`${t.date} ${t.description}`,
 				...(role ? [`\t- ${KEYS[role]}: ${event}   ← added`] : []),
-				...t.postings.map((p) => `\t${p.account} ${p.amount}${p.price ? ` ${p.price}` : ''}`),
+				...t.postings.map(
+					(p) =>
+						`\t${p.account} ${p.amount}${p.cost ? ` ${p.cost}` : ''}${p.price ? ` ${p.price}` : ''}`,
+				),
 			].join('\n')}</pre>
 	</div>
 {/snippet}

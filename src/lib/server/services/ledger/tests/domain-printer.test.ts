@@ -24,6 +24,7 @@ const transactions: RupeeTransaction[] = [
 				amount: amount('100.5'),
 				commodity: 'INR',
 				price: null,
+				cost: null,
 				balance: null,
 				metadata: {},
 			},
@@ -32,6 +33,7 @@ const transactions: RupeeTransaction[] = [
 				amount: amount('-100.5'),
 				commodity: 'INR',
 				price: null,
+				cost: null,
 				balance: null,
 				metadata: {},
 			},
@@ -49,6 +51,7 @@ const transactions: RupeeTransaction[] = [
 				amount: amount('-0.000001'),
 				commodity: 'INR',
 				price: null,
+				cost: null,
 				balance: null,
 				metadata: {},
 			},
@@ -57,6 +60,7 @@ const transactions: RupeeTransaction[] = [
 				amount: amount('0.000001'),
 				commodity: 'INR',
 				price: null,
+				cost: null,
 				balance: null,
 				metadata: {},
 			},
@@ -85,6 +89,7 @@ const annotated: RupeeLedgerFile = {
 					amount: amount('-1299'),
 					commodity: 'INR',
 					price: null,
+					cost: null,
 					balance: null,
 					metadata: {},
 				},
@@ -93,6 +98,7 @@ const annotated: RupeeLedgerFile = {
 					amount: amount('499'),
 					commodity: 'INR',
 					price: null,
+					cost: null,
 					balance: null,
 					metadata: { tags: ['gift, 80c'] },
 				},
@@ -101,6 +107,7 @@ const annotated: RupeeLedgerFile = {
 					amount: amount('800'),
 					commodity: 'INR',
 					price: null,
+					cost: null,
 					balance: null,
 					metadata: {},
 				},
@@ -138,6 +145,7 @@ describe('printing a ledger', () => {
 							amount: amount(a),
 							commodity: 'INR',
 							price: null,
+							cost: null,
 							balance: null,
 							metadata: {},
 						})),
@@ -219,6 +227,21 @@ describe('printing a ledger', () => {
 		);
 	});
 
+	it('writes a lot cost between the amount and the price, and reads it back', () => {
+		const content = [
+			'2026-10-01 Sell INFY',
+			'\tAssets:Zerodha -4.00 INFY {1500.00} @ 1700.00',
+			'\tAssets:Zerodha -2.00 INFY {900.00, 2019-03-04} @ 1700.00',
+			'\tAssets:Bank 10200.00',
+			'\tIncome:Gains -2400.00',
+			'',
+		].join('\n');
+		const parsed = parse(defaultConfiguration.ledger, { key: 'a.rupee', content });
+
+		expect(parsed.failed).toEqual([]);
+		expect(print(defaultConfiguration.ledger, ledger(parsed.succeeded))).toBe(content);
+	});
+
 	it('spells out commodities and prices, and reads them back', () => {
 		const content = [
 			'2026-10-01 Buy AAPL',
@@ -279,6 +302,7 @@ describe('viewing a transaction', () => {
 				amount: amount('10'),
 				commodity: 'INFY',
 				price: { kind: PriceKind.Unit, amount: amount('1500.125'), commodity: 'INR' },
+				cost: null,
 				balance: null,
 				metadata: {},
 			},
@@ -287,6 +311,7 @@ describe('viewing a transaction', () => {
 				amount: amount('-15001.25'),
 				commodity: 'INR',
 				price: null,
+				cost: null,
 				balance: null,
 				metadata: {},
 			},
@@ -301,8 +326,8 @@ describe('viewing a transaction', () => {
 			time: '18:45',
 			description: 'Bought shares',
 			postings: [
-				{ account: 'Assets:Broker', amount: '10.00 INFY', price: '@ 1500.125' },
-				{ account: 'Assets:Bank', amount: '-15001.25', price: null },
+				{ account: 'Assets:Broker', amount: '10.00 INFY', cost: null, price: '@ 1500.125' },
+				{ account: 'Assets:Bank', amount: '-15001.25', cost: null, price: null },
 			],
 		});
 	});

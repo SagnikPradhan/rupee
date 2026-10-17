@@ -44,6 +44,7 @@ const posting = (account: string, amount: string): RupeePosting => ({
 	amount: parseAmount(amount) as Amount,
 	commodity: 'INR',
 	price: null,
+	cost: null,
 	balance: null,
 	metadata: {},
 });
@@ -487,6 +488,76 @@ describe('market prices', () => {
 			prices: [],
 			failed: [{ type: 'ParseInvalidPrice', location: at }],
 		});
+	});
+});
+
+describe('lot costs', () => {
+	const sell = (lines: string[]) => run(['2026-10-01 Sell INFY', ...lines]);
+	const sold = (cost: RupeePosting['cost'], price: RupeePosting['price'] = null): RupeePosting => ({
+		...posting('Assets:Zerodha', '-4'),
+		commodity: 'INFY',
+		cost,
+		price,
+	});
+	const rupees = (amount: string, date: string | null = null) => ({
+		amount: parseAmount(amount) as Amount,
+		commodity: 'INR',
+		date: date === null ? null : Temporal.PlainDate.from(date),
+	});
+
+	it('balances a sale at its lot cost, with the gain beside it', () => {
+		expect(
+			sell(['\tAssets:Zerodha -4 INFY {1500} @ 1700', '\tAssets:Bank 6800', '\tIncome:Gains -800']),
+		).toEqual({
+			failed: [],
+			succeeded: [
+				transaction(1, '2026-10-01', 'Sell INFY', [
+					sold(rupees('1500'), {
+						amount: parseAmount('1700') as Amount,
+						commodity: 'INR',
+						kind: PriceKind.Unit,
+					}),
+					posting('Assets:Bank', '6800'),
+					posting('Income:Gains', '-800'),
+				]),
+			],
+		});
+	});
+
+	it('leaves the gain unbalanced when it is missing', () => {
+		expect(sell(['\tAssets:Zerodha -4 INFY {1500} @ 1700', '\tAssets:Bank 6800']).failed).toEqual([
+			{ type: 'ParseUnbalancedTransaction', location: at, residual: '800.00' },
+		]);
+	});
+
+	it('fills in the posting left without an amount at cost', () => {
+		const [t] = sell([
+			'\tAssets:Zerodha -4 INFY {1500}',
+			'\tIncome:Gains -800',
+			'\tAssets:Bank',
+		]).succeeded;
+		expect(t?.postings[2]).toEqual(posting('Assets:Bank', '6800'));
+	});
+
+	it('names a lot by the day it was bought, in a configured format', () => {
+		const [t] = sell(['\tAssets:Zerodha -4 INFY {1500, 2024-06-03}', '\tAssets:Bank']).succeeded;
+		expect(t?.postings[0]).toEqual(sold(rupees('1500', '2024-06-03')));
+	});
+
+	it('takes a lot cost in another commodity', () => {
+		const [t] = sell(['\tAssets:IBKR -4 AAPL {180 usd}', '\tAssets:IBKR:Cash']).succeeded;
+		expect(t?.postings[0]?.cost).toEqual({ ...rupees('180'), commodity: 'USD' });
+		expect(t?.postings[1]?.amount).toBe(parseAmount('720'));
+	});
+
+	it.each([
+		['an empty lot cost', '\tAssets:Zerodha -4 INFY {}'],
+		['a negative lot cost', '\tAssets:Zerodha -4 INFY {-1500}'],
+		['a lot cost without an amount', '\tAssets:Zerodha {1500}'],
+		['a lot date that is not a date', '\tAssets:Zerodha -4 INFY {1500, June}'],
+		['a lot date without a space after the comma', '\tAssets:Zerodha -4 INFY {1500,2024-06-03}'],
+	])('rejects %s', (_, line) => {
+		expect(sell([line, '\tAssets:Bank']).failed).toMatchObject([{ type: 'ParseInvalidPosting' }]);
 	});
 });
 
