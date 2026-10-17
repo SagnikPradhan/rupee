@@ -7,6 +7,7 @@
 <nav aria-label="Ledger">
 	<a href="/">{data.ledger.name}</a> ·
 	<a href="{base}/files">Files</a> ·
+	<a href="{base}/accounts">Accounts</a> ·
 	<a href="{base}/transactions">Transactions</a> ·
 	<a href="{base}/postings">Postings</a> ·
 	<a href="{base}/refine">Refine</a> ·

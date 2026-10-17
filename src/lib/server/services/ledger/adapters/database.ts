@@ -32,6 +32,7 @@ import {
 import { alias } from 'drizzle-orm/pg-core';
 import { v7 as uuidv7 } from 'uuid';
 import { BALANCE_TYPES, EVENT_KEYS } from '../domain/events';
+import type { Holding } from '../domain/holdings';
 import { book, type BookedPosting, type Booking } from '../domain/lots';
 import { displayLocation } from '../domain/parser';
 import { marketPrices } from '../domain/prices';
@@ -41,11 +42,13 @@ import {
 	CURRENCIES,
 	DisposalKind,
 	PriceKind,
+	PriceSource,
 	toMetadata,
 	type Amount,
 	type Ledger,
 	type LotCost,
 	type Price,
+	type Quantity,
 	type RupeeLedgerFile,
 	type RupeeMetadata,
 	type RupeeParseLocation,
@@ -594,7 +597,7 @@ const balanceChecks =
 			),
 		);
 
-// Rupees cost what they are, so they have no lots.
+// Currencies are money, so they have no lots.
 const lotCommodities =
 	(ledgerId: string) =>
 	(keys: string[]): ResultAsync<string[]> =>
@@ -760,6 +763,105 @@ const unmatched = (ledgerId: string) => (): ResultAsync<UnmatchedDisposal[]> =>
 		),
 	);
 
+// What every balance account holds now, counting no evidence. A holding's
+// cost is only known when all its open lots cost the same commodity.
+const holdings =
+	(ledgerId: string) =>
+	(evidence: string[]): ResultAsync<Holding[]> =>
+		withContext('db')((db) => {
+			const held = db
+				.select({
+					account: postings.account,
+					commodity: postings.commodity,
+					units: sql<string>`sum(${postings.amount})::text`.as('units'),
+				})
+				.from(postings)
+				.where(
+					and(
+						eq(postings.ledgerId, ledgerId),
+						inArray(postings.accountType, BALANCE_TYPES),
+						notInArray(postings.transactionId, evidence),
+					),
+				)
+				.groupBy(postings.account, postings.commodity)
+				.having(sql`sum(${postings.amount}) <> 0`)
+				.as('held');
+			const costs = db
+				.select({
+					account: lotTable.account,
+					commodity: lotTable.commodity,
+					amount:
+						sql<string>`round(sum(${lotTable.remaining}::numeric * ${lotTable.costAmount} / 1000000))::text`.as(
+							'amount',
+						),
+					currency: sql<
+						string | null
+					>`case when count(distinct ${lotTable.costCommodity}) = 1 then min(${lotTable.costCommodity}) end`.as(
+						'currency',
+					),
+				})
+				.from(lotTable)
+				.where(and(eq(lotTable.ledgerId, ledgerId), ne(lotTable.remaining, 0n)))
+				.groupBy(lotTable.account, lotTable.commodity)
+				.as('costs');
+
+			return attempt(() =>
+				db
+					.select({
+						account: held.account,
+						commodity: held.commodity,
+						units: held.units,
+						cost: costs.amount,
+						currency: costs.currency,
+					})
+					.from(held)
+					.leftJoin(
+						costs,
+						and(eq(costs.account, held.account), eq(costs.commodity, held.commodity)),
+					)
+					.orderBy(asc(held.account), asc(held.commodity)),
+			).map((rows) =>
+				rows.map((r) => ({
+					account: r.account,
+					commodity: r.commodity,
+					units: BigInt(r.units) as Amount,
+					cost:
+						r.cost === null || r.currency === null
+							? null
+							: { amount: BigInt(r.cost) as Amount, commodity: r.currency },
+				})),
+			);
+		});
+
+type LatestPriceRow = { commodity: string; amount: string; currency: string };
+
+// The latest price of each commodity on or before a day; that day, a `P` line beats an `@`.
+const latestPrices =
+	(ledgerId: string) =>
+	(commodities: string[], day: Temporal.PlainDate): ResultAsync<Record<string, Quantity>> =>
+		withContext('db')((db) =>
+			attempt(() =>
+				db.execute<LatestPriceRow>(sql`
+					select c.commodity, p.price_amount::text as amount, p.price_commodity as currency
+					from unnest(${sql.param(commodities)}::text[]) as c(commodity)
+					cross join lateral (
+						select price_amount, price_commodity
+						from ${priceTable}
+						where ledger_id = ${ledgerId} and commodity = c.commodity and date <= ${day.toString()}
+						order by date desc, source = ${PriceSource.Line} desc, line desc
+						limit 1
+					) p
+				`),
+			).map((r) =>
+				Object.fromEntries(
+					r.rows.map((p) => [
+						p.commodity,
+						{ amount: BigInt(p.amount) as Amount, commodity: p.currency },
+					]),
+				),
+			),
+		);
+
 type MetadataRow = { owner: string | null; key: string; value: string };
 
 // Rows come in written order, which `toMetadata` keeps.
@@ -785,6 +887,8 @@ export const index = (ledgerId: string) => ({
 	balanceChecks: balanceChecks(ledgerId),
 	lotCommodities: lotCommodities(ledgerId),
 	rebook: rebook(ledgerId),
+	holdings: holdings(ledgerId),
+	latestPrices: latestPrices(ledgerId),
 	unmatched: unmatched(ledgerId),
 	transactions: transactions(ledgerId),
 });

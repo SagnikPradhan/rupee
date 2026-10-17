@@ -108,7 +108,7 @@ export const weight = (
 };
 
 // Rounds half away from zero, back to the amount scale.
-const multiply = (a: Amount, b: Amount): Amount => {
+export const multiply = (a: Amount, b: Amount): Amount => {
 	const scale = 10n ** BigInt(AMOUNT_SCALE);
 	const product = a * b;
 	const half = (product < 0n ? -scale : scale) / 2n;

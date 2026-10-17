@@ -26,6 +26,7 @@ import {
 } from '../adapters/database';
 import { files, type Files } from '../adapters/storage';
 import { checkEvents, EventRole, linksOf } from '../domain/events';
+import { accountTree, value, type Holding } from '../domain/holdings';
 import { insertLinks, rewriteLinks, type LinkEdit, type Relink } from '../domain/links';
 import { displayLocation, parse } from '../domain/parser';
 import { indexedVersion, plan, type SyncPlan } from '../domain/sync';
@@ -222,6 +223,39 @@ export const getTransactions = (l: Ledger): ResultAsync<Batch<CountedTransaction
 				})),
 			),
 	);
+
+// Balance accounts as they stand on a day, valued in rupees.
+export const getAccounts = (l: Ledger, day: Temporal.PlainDate) =>
+	syncFiles(l).andThen((f) =>
+		valuedAccounts(l.id, day).andThen((a) =>
+			checkLots(l.id).map((u) => ({ succeeded: a, failed: [...f, ...u] })),
+		),
+	);
+
+// Evidence is not counted.
+const valuedAccounts = (ledgerId: string, day: Temporal.PlainDate) =>
+	index(ledgerId)
+		.eventMembers()
+		.map((m) => checkEvents(m).evidence)
+		.andThen((e) => index(ledgerId).holdings(e))
+		.andThen((h) => pricesOn(ledgerId, h, day).map((p) => accountTree(h.map((x) => value(x, p)))));
+
+// Prices of what is held and what it cost, then of the commodities those are priced in.
+const pricesOn = (ledgerId: string, held: Holding[], day: Temporal.PlainDate) => {
+	const commodities = held.flatMap((h) =>
+		h.cost ? [h.commodity, h.cost.commodity] : [h.commodity],
+	);
+	return index(ledgerId)
+		.latestPrices([...new Set(commodities)], day)
+		.andThen((p) =>
+			index(ledgerId)
+				.latestPrices(
+					Object.values(p).map((q) => q.commodity),
+					day,
+				)
+				.map((h) => ({ ...h, ...p })),
+		);
+};
 
 type Counting = { batch: Batch<CountedTransaction>; evidence: string[] };
 

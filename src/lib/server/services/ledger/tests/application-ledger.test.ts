@@ -842,3 +842,76 @@ describe('lots', () => {
 			expect(await held(db, ledger.id)).toHaveLength(1);
 		}));
 });
+
+describe('accounts', () => {
+	const day = Temporal.PlainDate.from('2026-10-17');
+
+	it('values what each account holds at its latest price, a P line first', ({ context, db }) =>
+		provide(context, async () => {
+			const ledger = await createLedger(db);
+			const content = [
+				'2026-01-02 Buy',
+				'\tAssets:Zerodha 10 INFY @ 1500',
+				'\tAssets:Bank',
+				'',
+				'2026-03-01 Sell',
+				'\tAssets:Zerodha -4 INFY {1500} @ 1700',
+				'\tAssets:Bank 6800',
+				'\tIncome:Gains -800',
+				'',
+				'2026-04-01 Bonus',
+				'\tAssets:Zerodha 1 TCS',
+				'\tIncome:Bonus -1 TCS',
+				'',
+				'2026-10-01 Buy',
+				'\tAssets:Zerodha 1 INFY @ 1900',
+				'\tAssets:Bank',
+				'',
+				'P 2026-10-01 INFY 1800',
+				'P 2026-10-20 INFY 2000',
+				'',
+			].join('\n');
+			await Ledger.createFile({ ledger, key: 'a.rupee', content });
+
+			const accounts = (await Ledger.getAccounts(ledger, day))._unsafeUnwrap().succeeded;
+			expect(accounts.map((a) => [a.account, a.total, a.unpriced])).toEqual([
+				['Assets', 2500_000_000n, 1],
+				['Assets:Bank', -10100_000_000n, 0],
+				['Assets:Zerodha', 12600_000_000n, 1],
+			]);
+			expect(accounts[2]?.holdings).toMatchObject([
+				{
+					commodity: 'INFY',
+					units: 7_000_000n,
+					cost: { amount: 10900_000_000n, commodity: 'INR' },
+					price: { amount: 1800_000_000n, commodity: 'INR' },
+					gain: 1700_000_000n,
+				},
+				{ commodity: 'TCS', units: 1_000_000n, value: null },
+			]);
+		}));
+
+	it('values shares priced in dollars at the price of a dollar', ({ context, db }) =>
+		provide(context, async () => {
+			const ledger = await createLedger(db);
+			const content = [
+				'2026-10-01 Fund',
+				'\tAssets:IBKR 1000 USD @ 83',
+				'\tAssets:HDFC',
+				'',
+				'2026-10-02 Buy',
+				'\tAssets:IBKR 2 AAPL @ 200 USD',
+				'\tAssets:IBKR -400 USD',
+				'',
+				'P 2026-10-03 AAPL 250 USD',
+				'',
+			].join('\n');
+			await Ledger.createFile({ ledger, key: 'ibkr.rupee', content });
+
+			const accounts = (await Ledger.getAccounts(ledger, day))._unsafeUnwrap().succeeded;
+			expect(accounts.find((a) => a.account === 'Assets:IBKR')?.holdings).toMatchObject([
+				{ commodity: 'AAPL', value: 41500_000_000n, gain: 8300_000_000n },
+				{ commodity: 'USD', value: 49800_000_000n, gain: null },
+			]);
+		}));
+});
