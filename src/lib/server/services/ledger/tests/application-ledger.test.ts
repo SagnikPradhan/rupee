@@ -4,6 +4,8 @@ import {
 	ledgerFiles,
 	memberships,
 	metadata,
+	prices,
+	PriceSource,
 	transactions,
 } from '#lib/server/db/schema.ts';
 import { provide } from '#lib/server/shared/context/context.ts';
@@ -116,6 +118,36 @@ describe('syncing the ledger', () => {
 			await stored(storage, ledger).delete('a.rupee');
 			await Ledger.sync(ledger);
 			expect(await db.$count(metadata)).toBe(before);
+		}));
+
+	it('indexes market prices, replacing them when the file changes', ({ context, db, storage }) =>
+		provide(context, async () => {
+			const ledger = await createLedger(db);
+			const bought = '2026-10-01 Buy INFY\n\tAssets:Zerodha 10 INFY @ 1500\n\tAssets:Bank\n';
+			const indexed = () =>
+				db
+					.select({
+						commodity: prices.commodity,
+						amount: prices.priceAmount,
+						source: prices.source,
+					})
+					.from(prices)
+					.where(eq(prices.ledgerId, ledger.id))
+					.orderBy(asc(prices.line));
+
+			await put(storage, ledger, 'a.rupee', `${bought}\nP 2026-10-17 INFY 1820\n`);
+			await Ledger.sync(ledger);
+			expect(await indexed()).toEqual([
+				{ commodity: 'INFY', amount: 1_500_000_000n, source: PriceSource.Posting },
+				{ commodity: 'INFY', amount: 1_820_000_000n, source: PriceSource.Line },
+			]);
+
+			await put(storage, ledger, 'a.rupee', 'P 2026-10-18 INFY 1830\nP 2026-10-18 TCS 4100\n');
+			await Ledger.sync(ledger);
+			expect(await indexed()).toEqual([
+				{ commodity: 'INFY', amount: 1_830_000_000n, source: PriceSource.Line },
+				{ commodity: 'TCS', amount: 4_100_000_000n, source: PriceSource.Line },
+			]);
 		}));
 
 	it('re-indexes changed files and drops deleted ones', ({ context, db, storage }) =>

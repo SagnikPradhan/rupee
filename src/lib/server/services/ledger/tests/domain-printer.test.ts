@@ -64,7 +64,11 @@ const transactions: RupeeTransaction[] = [
 	},
 ];
 
-const ledger = (t: RupeeTransaction[]): RupeeLedgerFile => ({ metadata: {}, transactions: t });
+const ledger = (t: RupeeTransaction[]): RupeeLedgerFile => ({
+	metadata: {},
+	transactions: t,
+	prices: [],
+});
 
 const annotated: RupeeLedgerFile = {
 	metadata: { statement: ['hdfc-card-oct-2026.pdf'] },
@@ -103,6 +107,7 @@ const annotated: RupeeLedgerFile = {
 			],
 		},
 	],
+	prices: [],
 };
 
 describe('printing a ledger', () => {
@@ -160,6 +165,7 @@ describe('printing a ledger', () => {
 		const content = print(defaultConfiguration.ledger, ledger(transactions));
 		expect(parse(defaultConfiguration.ledger, { key: 'a.rupee', content })).toEqual({
 			metadata: {},
+			prices: [],
 			succeeded: transactions,
 			failed: [],
 		});
@@ -187,6 +193,7 @@ describe('printing a ledger', () => {
 		const content = print(defaultConfiguration.ledger, annotated);
 		expect(parse(defaultConfiguration.ledger, { key: 'a.rupee', content })).toEqual({
 			metadata: annotated.metadata,
+			prices: [],
 			succeeded: annotated.transactions,
 			failed: [],
 		});
@@ -227,6 +234,24 @@ describe('printing a ledger', () => {
 
 		expect(parsed.failed).toEqual([]);
 		expect(print(defaultConfiguration.ledger, ledger(parsed.succeeded))).toBe(content);
+	});
+
+	it('writes market prices after the transactions, and reads them back', () => {
+		const content = [
+			'2026-10-01 Buy INFY',
+			'\tAssets:Zerodha 10.00 INFY @ 1500.00',
+			'\tAssets:Bank -15000.00',
+			'',
+			'P 2026-10-17 INFY 1820.00',
+			'P 2026-10-17 AAPL 230.50 USD',
+			'',
+		].join('\n');
+		const parsed = parse(defaultConfiguration.ledger, { key: 'a.rupee', content });
+
+		expect(parsed.failed).toEqual([]);
+		expect(
+			print(defaultConfiguration.ledger, { ...ledger(parsed.succeeded), prices: parsed.prices }),
+		).toBe(content);
 	});
 
 	it('follows the configuration', () => {

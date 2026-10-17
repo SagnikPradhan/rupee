@@ -1,6 +1,6 @@
-import { AccountType, PriceKind } from '#lib/server/db/schema.ts';
+import { AccountType, PriceKind, PriceSource } from '#lib/server/db/schema.ts';
 
-export { AccountType, PriceKind };
+export { AccountType, PriceKind, PriceSource };
 
 // `owner` is the user whose storage holds the ledger.
 export type Ledger = { id: string; handle: string; name: string; owner: string };
@@ -56,9 +56,17 @@ export type RupeeTransaction = {
 	postings: RupeePosting[];
 };
 
+export type RupeeMarketPrice = {
+	location: RupeeParseLocation;
+	date: Temporal.PlainDate;
+	commodity: string;
+	price: Quantity;
+};
+
 export type RupeeLedgerFile = {
 	metadata: RupeeMetadata;
 	transactions: RupeeTransaction[];
+	prices: RupeeMarketPrice[];
 };
 
 export const formatAmount = (amount: Amount): string => {

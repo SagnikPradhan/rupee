@@ -6,6 +6,7 @@ import {
 	memberships,
 	metadata as metadataTable,
 	postings,
+	prices as priceTable,
 	storages,
 	transactions as transactionTable,
 } from '#lib/server/db/schema.ts';
@@ -18,6 +19,7 @@ import { alias } from 'drizzle-orm/pg-core';
 import { v7 as uuidv7 } from 'uuid';
 import { BALANCE_TYPES, EVENT_KEYS } from '../domain/events';
 import { displayLocation } from '../domain/parser';
+import { marketPrices } from '../domain/prices';
 import type { FileVersion } from '../domain/sync';
 import {
 	accountType,
@@ -106,6 +108,16 @@ const put =
 								: [];
 						}),
 					);
+					const priceRows = marketPrices(file).map((p) => ({
+						ledgerId,
+						fileId,
+						line: p.location.line,
+						date: p.date.toString(),
+						commodity: p.commodity,
+						priceAmount: p.price.amount,
+						priceCommodity: p.price.commodity,
+						source: p.source,
+					}));
 					const metadataRows = [
 						...ownedBy({ ledgerId, fileId }, file.metadata),
 						...indexed.flatMap(({ id, transaction }) =>
@@ -120,12 +132,14 @@ const put =
 
 					await tx.delete(metadataTable).where(eq(metadataTable.fileId, fileId));
 					await tx.delete(transactionTable).where(eq(transactionTable.fileId, fileId));
+					await tx.delete(priceTable).where(eq(priceTable.fileId, fileId));
 					// A transaction's statements share one connection, so they go one at a time.
 					await inOrder([
 						...statementChunks(transactionRows).map(
 							(c) => () => tx.insert(transactionTable).values(c),
 						),
 						...statementChunks(postingRows).map((c) => () => tx.insert(postings).values(c)),
+						...statementChunks(priceRows).map((c) => () => tx.insert(priceTable).values(c)),
 						...statementChunks(metadataRows).map((c) => () => tx.insert(metadataTable).values(c)),
 					]);
 				}),

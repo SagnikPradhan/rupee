@@ -26,6 +26,14 @@ export enum PriceKind {
 
 export const priceKind = PG.pgEnum('price_kind', PriceKind);
 
+// Where an indexed price was written: a `P` line, or a posting's `@`.
+export enum PriceSource {
+	Line = 'line',
+	Posting = 'posting',
+}
+
+export const priceSource = PG.pgEnum('price_source', PriceSource);
+
 export enum AccountType {
 	Assets = 'Assets',
 	Liabilities = 'Liabilities',
@@ -215,6 +223,31 @@ export const postings = PG.pgTable(
 		PG.index('postings_ledger_id_balance')
 			.on(t.ledgerId, t.account, t.commodity)
 			.where(sql`${t.balance} IS NOT NULL`),
+	],
+);
+
+export const prices = PG.pgTable(
+	'prices',
+	(t) => ({
+		...base,
+		ledgerId: t
+			.uuid()
+			.notNull()
+			.references(() => ledgers.id, { onDelete: 'cascade' }),
+		fileId: t
+			.uuid()
+			.notNull()
+			.references(() => ledgerFiles.id, { onDelete: 'cascade' }),
+		line: t.integer().notNull(),
+		date: t.date().notNull(),
+		commodity: t.text().notNull(),
+		priceAmount: t.bigint({ mode: 'bigint' }).notNull(), // of one unit, in millionths
+		priceCommodity: t.text().notNull(),
+		source: priceSource().notNull(),
+	}),
+	(t) => [
+		PG.index('prices_file_id').on(t.fileId),
+		PG.index('prices_ledger_id_commodity_date').on(t.ledgerId, t.commodity, t.date),
 	],
 );
 

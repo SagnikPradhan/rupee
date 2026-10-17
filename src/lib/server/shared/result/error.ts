@@ -19,6 +19,7 @@ export type RupeeError =
 	| { type: 'ParseMultipleImplicitPostings'; location: string }
 	| { type: 'ParseInvalidMetadata'; location: string }
 	| { type: 'ParseDetachedMetadata'; location: string }
+	| { type: 'ParseInvalidPrice'; location: string }
 	| { type: 'EventInvalidMembership'; location: string }
 	| { type: 'EventStale'; location: string }
 	| { type: 'EventIdTaken'; event: string }

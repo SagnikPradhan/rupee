@@ -83,6 +83,7 @@ const indexFile = (ledgerId: string, file: RupeeFile): ResultAsync<RupeeError[]>
 			.put(file.key, indexedVersion(file.version, parsed.failed), {
 				metadata: parsed.metadata,
 				transactions: parsed.succeeded,
+				prices: parsed.prices,
 			})
 			.map(() => parsed.failed);
 	});

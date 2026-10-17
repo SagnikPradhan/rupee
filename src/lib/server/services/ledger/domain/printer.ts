@@ -4,6 +4,7 @@ import {
 	formatQuantity,
 	PriceKind,
 	type RupeeLedgerFile,
+	type RupeeMarketPrice,
 	type RupeeMetadata,
 	type RupeePosting,
 	type RupeeTransaction,
@@ -14,11 +15,12 @@ export const PRICE_SIGN: Record<PriceKind, string> = {
 	[PriceKind.Total]: '@@',
 };
 
-export const print = (
-	c: LedgerConfiguration,
-	{ metadata, transactions }: RupeeLedgerFile,
-): string =>
-	[printMetadata('', metadata), ...transactions.map((t) => printTransaction(c, t))]
+export const print = (c: LedgerConfiguration, file: RupeeLedgerFile): string =>
+	[
+		printMetadata('', file.metadata),
+		...file.transactions.map((t) => printTransaction(c, t)),
+		file.prices.map((p) => printPrice(c, p)).join(''),
+	]
 		.filter(Boolean)
 		.join('\n');
 
@@ -57,6 +59,9 @@ const printPosting = (p: RupeePosting, elided: boolean): string => {
 	].join(' ');
 	return `\t${line}\n${printMetadata('\t\t', p.metadata)}`;
 };
+
+const printPrice = ({ dateFormats }: LedgerConfiguration, p: RupeeMarketPrice): string =>
+	`P ${printDate(dateFormats[0], p.date)} ${p.commodity} ${formatQuantity(p.price)}\n`;
 
 const printMetadata = (t: string, m: RupeeMetadata): string =>
 	Object.entries(m)

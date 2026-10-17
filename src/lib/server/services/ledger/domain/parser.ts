@@ -16,6 +16,7 @@ import {
 	type Price,
 	type Quantity,
 	type RupeeFile,
+	type RupeeMarketPrice,
 	type RupeeMetadata,
 	type RupeeParseLocation,
 	type RupeePosting,
@@ -26,7 +27,10 @@ export const displayLocation = ({ file, line }: RupeeParseLocation): string => `
 
 export type RupeeLine = { location: RupeeParseLocation; content: string };
 
-export type RupeeParsedFile = Batch<RupeeTransaction> & { metadata: RupeeMetadata };
+export type RupeeParsedFile = Batch<RupeeTransaction> & {
+	metadata: RupeeMetadata;
+	prices: RupeeMarketPrice[];
+};
 
 // Metadata above the first transaction belongs to the file.
 export const parse = (
@@ -37,12 +41,14 @@ export const parse = (
 	const preamble = readMetadata(
 		takeWhile(input, (l) => isBlank(l) || isMetadata(l)).filter(isMetadata),
 	);
+	const prices = batch(input.filter(isPriceLine).map((l) => parsePriceLine(c, l)));
 	const parsed = parseTransactions(c, input);
 
 	return {
 		metadata: preamble.metadata,
+		prices: prices.succeeded,
 		succeeded: parsed.succeeded,
-		failed: [...preamble.failed, ...parsed.failed],
+		failed: [...preamble.failed, ...prices.failed, ...parsed.failed],
 	};
 };
 
@@ -78,7 +84,7 @@ export const parseTransactions = (
 	const results: Result<RupeeTransaction>[] = [];
 
 	for (const line of drain(lines)) {
-		if (isBlank(line)) continue;
+		if (isBlank(line) || isPriceLine(line)) continue;
 		if (isMetadata(line)) {
 			results.push(
 				err(fault('ParseDetachedMetadata', { location: displayLocation(line.location) })),
@@ -162,6 +168,8 @@ const isComment = ({ content }: RupeeLine) => content.startsWith(';');
 const isMetadata = ({ content }: RupeeLine) => /^\s*-(\s|$)/.test(content);
 
 const isPosting = (l: RupeeLine) => /^(\t| {2})/.test(l.content) && !isBlank(l) && !isMetadata(l);
+
+const isPriceLine = ({ content }: RupeeLine) => /^P\s/.test(content);
 
 // Each commodity sums to zero once priced postings are weighed at their price.
 // A posting without an amount takes what is left, if that is one commodity.
@@ -253,6 +261,25 @@ const readWords = <T>(
 		})
 		.sort((a, b) => a.rest.length - b.rest.length)
 		.at(0);
+
+// `P date commodity price [commodity]`, as ledger writes it.
+const parsePriceLine = (
+	{ dateFormats }: LedgerConfiguration,
+	{ location, content }: RupeeLine,
+): Result<RupeeMarketPrice> => {
+	const date = readWords(dateFormats, content.trim().split(/\s+/).slice(1), parseDate);
+	const [commodity = '', ...price] = date?.rest ?? [];
+	const quantity = readQuantity(price.join(' '));
+	if (!date || !COMMODITY.test(commodity) || !quantity || quantity.amount < 0n)
+		return err(fault('ParseInvalidPrice', { location: displayLocation(location) }));
+
+	return ok({
+		location,
+		date: date.value,
+		commodity: commodity.toUpperCase(),
+		price: { amount: quantity.amount, commodity: quantity.commodity ?? DEFAULT_COMMODITY },
+	});
+};
 
 export const parsePosting = (l: RupeeLine): Result<WrittenPosting> =>
 	readPosting(l).andThen((p) => checkAccount(l.location, p));
