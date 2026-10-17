@@ -20,6 +20,7 @@ export type RupeeFile = {
 };
 
 export const AMOUNT_SCALE = 6;
+export const AMOUNT_UNIT = 10n ** BigInt(AMOUNT_SCALE);
 
 // Millionths of a unit (`1250.5` is `1_250_500_000n`); only `parseAmount` makes one.
 export type Amount = bigint & { readonly brand: unique symbol };
@@ -42,6 +43,9 @@ export const DEFAULT_COMMODITY = 'INR';
 
 /** ISO 4217 codes, which are held as money rather than in lots. */
 export const CURRENCIES = Intl.supportedValuesOf('currency');
+
+// Currencies are money, so they have no lots.
+export const hasLots = (c: string) => !CURRENCIES.includes(c);
 
 export type Quantity = { amount: Amount; commodity: string };
 export type Price = Quantity & { kind: PriceKind };
@@ -109,11 +113,18 @@ export const weight = (
 
 // Rounds half away from zero, back to the amount scale.
 export const multiply = (a: Amount, b: Amount): Amount => {
-	const scale = 10n ** BigInt(AMOUNT_SCALE);
 	const product = a * b;
-	const half = (product < 0n ? -scale : scale) / 2n;
-	return ((product + half) / scale) as Amount;
+	const half = (product < 0n ? -AMOUNT_UNIT : AMOUNT_UNIT) / 2n;
+	return ((product + half) / AMOUNT_UNIT) as Amount;
 };
+
+// Both are non-negative here; rounds half up, back to the amount scale.
+export const divide = (a: Amount, b: Amount): Amount =>
+	((a * AMOUNT_UNIT * 2n + b) / (2n * b)) as Amount;
+
+export const sum = (a: Amount[]): Amount => a.reduce((t, x) => t + x, 0n) as Amount;
+
+export const min = (a: Amount, b: Amount): Amount => (a < b ? a : b);
 
 export const accountType = (a: string): AccountType | null =>
 	Object.values(AccountType).find((r) => r === a.split(':')[0]) ?? null;

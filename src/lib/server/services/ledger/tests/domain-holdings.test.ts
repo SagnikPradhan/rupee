@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { accountTree, realised, value } from '#services/ledger/domain/holdings.ts';
+import { accountTree, value } from '#services/ledger/domain/holdings.ts';
 import { parseAmount } from '#services/ledger/domain/parser.ts';
 import type { Amount, Quantity } from '#services/ledger/domain/types.ts';
 
@@ -69,20 +69,5 @@ describe('accountTree', () => {
 			['Assets:Bank-2', 1, amount('100'), 0],
 			['Assets:Zerodha', 1, amount('18000'), 1],
 		]);
-	});
-});
-
-describe('realised', () => {
-	it('gains the price over the cost on every unit a sale takes', () => {
-		expect(realised(amount('-4'), quantity('1700'), quantity('1500'))).toBe(amount('800'));
-	});
-
-	it('gains the cost over the price on every unit a cover returns', () => {
-		expect(realised(amount('4'), quantity('1600'), quantity('1700'))).toBe(amount('400'));
-	});
-
-	it('realises nothing without a price in the commodity of the cost', () => {
-		expect(realised(amount('-4'), null, quantity('1500'))).toBeNull();
-		expect(realised(amount('-4'), quantity('20', 'USD'), quantity('1500'))).toBeNull();
 	});
 });

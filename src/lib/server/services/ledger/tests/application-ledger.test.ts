@@ -942,7 +942,11 @@ describe('accounts', () => {
 					origin: 'buy',
 					remaining: 0n,
 					disposals: [
-						{ kind: 'sale', units: -4_000_000n, gain: 800_000_000n },
+						{
+							kind: 'sale',
+							units: -4_000_000n,
+							gain: { amount: 800_000_000n, commodity: 'INR' },
+						},
 						{ kind: 'transfer', units: -6_000_000n, price: null, gain: null },
 					],
 				},

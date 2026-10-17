@@ -61,9 +61,9 @@ CREATE INDEX "disposals_lot_id" ON "disposals" USING btree ("lot_id");--> statem
 CREATE INDEX "disposals_posting_id" ON "disposals" USING btree ("posting_id");--> statement-breakpoint
 CREATE INDEX "disposals_ledger_id_commodity" ON "disposals" USING btree ("ledger_id","commodity");--> statement-breakpoint
 CREATE INDEX "disposals_ledger_id_unmatched" ON "disposals" USING btree ("ledger_id") WHERE "disposals"."lot_id" IS NULL;--> statement-breakpoint
-CREATE INDEX "lots_ledger_id_account_commodity" ON "lots" USING btree ("ledger_id","account","commodity");--> statement-breakpoint
-CREATE INDEX "lots_ledger_id_commodity" ON "lots" USING btree ("ledger_id","commodity");--> statement-breakpoint
+CREATE INDEX "lots_ledger_id_commodity_account" ON "lots" USING btree ("ledger_id","commodity","account");--> statement-breakpoint
 CREATE INDEX "lots_posting_id" ON "lots" USING btree ("posting_id");--> statement-breakpoint
+CREATE INDEX "lots_source_id" ON "lots" USING btree ("source_id");--> statement-breakpoint
 CREATE INDEX "prices_file_id" ON "prices" USING btree ("file_id");--> statement-breakpoint
 CREATE INDEX "prices_ledger_id_commodity_date" ON "prices" USING btree ("ledger_id","commodity","date");--> statement-breakpoint
 CREATE INDEX "postings_ledger_id_commodity" ON "postings" USING btree ("ledger_id","commodity");--> statement-breakpoint

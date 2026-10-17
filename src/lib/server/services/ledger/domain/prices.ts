@@ -1,35 +1,21 @@
 import {
-	AMOUNT_SCALE,
+	divide,
 	PriceKind,
 	PriceSource,
 	type Amount,
+	type Price,
 	type Quantity,
 	type RupeeLedgerFile,
-	type RupeePosting,
+	type RupeeTransaction,
 } from './types';
 
 // Every price a file writes, `P` lines and postings alike, each for one unit.
 export const marketPrices = (file: RupeeLedgerFile) => [
 	...file.prices.map((p) => ({ ...p, source: PriceSource.Line })),
-	...file.transactions.flatMap((t) =>
-		t.postings.flatMap((p) => {
-			const price = unitPrice(p);
-			return price
-				? [
-						{
-							location: t.location,
-							date: t.date,
-							commodity: p.commodity,
-							price,
-							source: PriceSource.Posting,
-						},
-					]
-				: [];
-		}),
-	),
+	...file.transactions.flatMap(postingPrices),
 ];
 
-export const unitPrice = (p: Pick<RupeePosting, 'amount' | 'price'>): Quantity | null => {
+export const unitPrice = (p: { amount: Amount; price: Price | null }): Quantity | null => {
 	if (p.price === null || p.amount === 0n) return null;
 	if (p.price.kind === PriceKind.Unit)
 		return { amount: p.price.amount, commodity: p.price.commodity };
@@ -38,6 +24,11 @@ export const unitPrice = (p: Pick<RupeePosting, 'amount' | 'price'>): Quantity |
 	return { amount: divide(p.price.amount, units), commodity: p.price.commodity };
 };
 
-// Both are non-negative here; rounds half up, back to the amount scale.
-const divide = (a: Amount, b: Amount): Amount =>
-	((a * 10n ** BigInt(AMOUNT_SCALE) * 2n + b) / (2n * b)) as Amount;
+const postingPrices = (t: RupeeTransaction) =>
+	t.postings.flatMap((p) => {
+		const price = unitPrice(p);
+		if (price === null) return [];
+
+		const at = { location: t.location, date: t.date, commodity: p.commodity };
+		return [{ ...at, price, source: PriceSource.Posting }];
+	});

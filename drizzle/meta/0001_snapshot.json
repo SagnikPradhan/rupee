@@ -1,5 +1,5 @@
 {
-  "id": "114dda59-6e8a-4b98-aa42-e7bda89f063c",
+  "id": "e409d571-fba8-437a-9ef9-dc7a7447b098",
   "prevId": "ea06c9d5-f1db-46aa-a7c0-6f5a5cea4001",
   "version": "7",
   "dialect": "postgresql",
@@ -823,44 +823,23 @@
         }
       },
       "indexes": {
-        "lots_ledger_id_account_commodity": {
-          "name": "lots_ledger_id_account_commodity",
+        "lots_ledger_id_commodity_account": {
+          "name": "lots_ledger_id_commodity_account",
           "columns": [
             {
               "expression": "ledger_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "commodity",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
             },
             {
               "expression": "account",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "commodity",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "lots_ledger_id_commodity": {
-          "name": "lots_ledger_id_commodity",
-          "columns": [
-            {
-              "expression": "ledger_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "commodity",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -876,6 +855,21 @@
           "columns": [
             {
               "expression": "posting_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "lots_source_id": {
+          "name": "lots_source_id",
+          "columns": [
+            {
+              "expression": "source_id",
               "isExpression": false,
               "asc": true,
               "nulls": "last"

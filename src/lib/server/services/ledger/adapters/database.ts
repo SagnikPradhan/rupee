@@ -39,6 +39,7 @@ import { marketPrices } from '../domain/prices';
 import type { FileVersion } from '../domain/sync';
 import {
 	accountType,
+	AMOUNT_UNIT,
 	CURRENCIES,
 	DisposalKind,
 	PriceKind,
@@ -634,9 +635,10 @@ const rebook =
 			),
 		);
 
-type BookedQuery = { ledgerId: string; commodity: string; evidence: string[] };
-
-const bookedPostings = (db: Database, q: BookedQuery): Promise<BookedPosting[]> =>
+const bookedPostings = (
+	db: Database,
+	q: { ledgerId: string; commodity: string; evidence: string[] },
+): Promise<BookedPosting[]> =>
 	db
 		.select({
 			id: postings.id,
@@ -682,15 +684,17 @@ const bookedPostings = (db: Database, q: BookedQuery): Promise<BookedPosting[]> 
 			})),
 		);
 
-type LotOwner = { ledgerId: string; commodity: string };
+const replaceLots = async (
+	db: Database,
+	o: { ledgerId: string; commodity: string },
+	booking: Booking,
+) => {
+	const ids = booking.lots.map(() => uuidv7());
+	const idOf = (k: number | null) => (k === null ? null : (ids[k] ?? null));
 
-const replaceLots = async (db: Database, o: LotOwner, booking: Booking) => {
-	const stored = booking.lots.map((l) => ({ lot: l, id: uuidv7() }));
-	const idOf = (k: number | null) => (k === null ? null : (stored[k]?.id ?? null));
-
-	const lotRows = stored.map(({ lot, id }) => ({
+	const lotRows = booking.lots.map((lot) => ({
 		...o,
-		id,
+		id: ids[lot.key],
 		postingId: lot.posting,
 		sourceId: idOf(lot.source),
 		account: lot.account,
@@ -791,7 +795,7 @@ const holdings =
 					account: lotTable.account,
 					commodity: lotTable.commodity,
 					amount:
-						sql<string>`round(sum(${lotTable.remaining}::numeric * ${lotTable.costAmount} / 1000000))::text`.as(
+						sql<string>`round(sum(${lotTable.remaining}::numeric * ${lotTable.costAmount} / ${sql.raw(AMOUNT_UNIT.toString())}))::text`.as(
 							'amount',
 						),
 					currency: sql<
@@ -917,6 +921,7 @@ const lotsIn = (ledgerId: string) => (account: string, commodity: string) =>
 				)
 				.orderBy(asc(transactionTable.date), asc(ledgerFiles.key), asc(transactionTable.line));
 
+			const byLot = Object.groupBy(taken, (d) => d.lot ?? '');
 			return lots.map((l) => ({
 				location: { file: l.file, line: l.line },
 				date: Temporal.PlainDate.from(l.date),
@@ -925,15 +930,13 @@ const lotsIn = (ledgerId: string) => (account: string, commodity: string) =>
 				units: l.units as Amount,
 				remaining: l.remaining as Amount,
 				cost: { amount: l.costAmount as Amount, commodity: l.costCommodity },
-				disposals: taken
-					.filter((d) => d.lot === l.id)
-					.map((d) => ({
-						location: { file: d.file, line: d.line },
-						date: Temporal.PlainDate.from(d.date),
-						kind: d.kind,
-						units: d.units as Amount,
-						price: toQuantity(d.priceAmount, d.priceCommodity),
-					})),
+				disposals: (byLot[l.id] ?? []).map((d) => ({
+					location: { file: d.file, line: d.line },
+					date: Temporal.PlainDate.from(d.date),
+					kind: d.kind,
+					units: d.units as Amount,
+					price: toQuantity(d.priceAmount, d.priceCommodity),
+				})),
 			}));
 		}),
 	);

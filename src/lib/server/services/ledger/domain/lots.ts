@@ -3,6 +3,9 @@ import {
 	DEFAULT_COMMODITY,
 	DisposalKind,
 	LotOrigin,
+	min,
+	multiply,
+	sum,
 	type Amount,
 	type LotCost,
 	type Price,
@@ -26,7 +29,7 @@ export type BookedPosting = {
 	cost: LotCost | null;
 };
 
-// `key` stands in for an id until the lot is stored; `source` is the key of the lot a transfer moved.
+/** `key` stands in for an id until the lot is stored; `source` is the key of the lot a transfer moved. */
 export type Lot = {
 	key: number;
 	posting: string;
@@ -39,7 +42,7 @@ export type Lot = {
 	cost: Quantity;
 };
 
-// `lot` is null for units no open lot covers; `units` is what the lot changes by.
+/** `lot` is null for units no open lot covers; `units` is what the lot changes by. */
 export type Disposal = {
 	lot: number | null;
 	posting: string;
@@ -59,6 +62,15 @@ export const book = (postings: BookedPosting[]): Booking => {
 
 	return booking;
 };
+
+// A sale or cover realises its price over the lot's cost, for every unit it takes.
+export const realised = (units: Amount, price: Quantity | null, cost: Quantity): Quantity | null =>
+	price === null || price.commodity !== cost.commodity
+		? null
+		: {
+				amount: multiply(-units as Amount, (price.amount - cost.amount) as Amount),
+				commodity: cost.commodity,
+			};
 
 // Units leave before any arrive, so the lots a transfer moves are there to receive.
 const bookTransaction = (b: Booking, group: BookedPosting[]) => {
@@ -87,14 +99,7 @@ const takeOut = (b: Booking, p: BookedPosting, traded: boolean, transfer: boolea
 const sellUnnamed = (b: Booking, p: BookedPosting): Piece[] => {
 	const holding = open(b.lots, p.account, LONG, null).length > 0;
 	if (holding) dispose(b, p, DisposalKind.Sale, []);
-	if (!holding)
-		openLot(b, p, {
-			origin: LotOrigin.Short,
-			date: p.date,
-			units: p.amount,
-			cost: costOf(p),
-			source: null,
-		});
+	if (!holding) openLot(b, p, { origin: LotOrigin.Short, units: p.amount, cost: costOf(p) });
 
 	return [];
 };
@@ -111,13 +116,7 @@ const takeIn = (b: Booking, p: BookedPosting, moved: Piece[]) => {
 		return;
 	}
 	if (p.price !== null) {
-		openLot(b, p, {
-			origin: LotOrigin.Buy,
-			date: p.date,
-			units: p.amount,
-			cost: costOf(p),
-			source: null,
-		});
+		openLot(b, p, { origin: LotOrigin.Buy, units: p.amount, cost: costOf(p) });
 		return;
 	}
 
@@ -128,7 +127,7 @@ const takeIn = (b: Booking, p: BookedPosting, moved: Piece[]) => {
 const receive = (b: Booking, p: BookedPosting, moved: Piece[]) => {
 	const received: Amount[] = [];
 	for (const piece of moved) {
-		const units = min(piece.units, (p.amount - total(received)) as Amount);
+		const units = min(piece.units, (p.amount - sum(received)) as Amount);
 		if (units === 0n) break;
 
 		const source = piece.lot;
@@ -144,22 +143,15 @@ const receive = (b: Booking, p: BookedPosting, moved: Piece[]) => {
 	}
 	moved.splice(0, moved.length, ...moved.filter((m) => m.units > 0n));
 
-	const rest = (p.amount - total(received)) as Amount;
-	if (rest > 0n)
-		openLot(b, p, {
-			origin: LotOrigin.Unpriced,
-			date: p.date,
-			units: rest,
-			cost: UNPRICED,
-			source: null,
-		});
+	const rest = (p.amount - sum(received)) as Amount;
+	if (rest > 0n) openLot(b, p, { origin: LotOrigin.Unpriced, units: rest, cost: UNPRICED });
 };
 
 // Units no open lot covers are disposed of from no lot, which reports them.
 const dispose = (b: Booking, p: BookedPosting, kind: DisposalKind, pieces: Piece[]) => {
 	const sign = p.amount < 0n ? -1n : 1n;
 	const price = kind === DisposalKind.Sale || kind === DisposalKind.Cover ? unitPrice(p) : null;
-	const rest = (sign * p.amount - total(pieces.map((c) => c.units))) as Amount;
+	const rest = (sign * p.amount - sum(pieces.map((c) => c.units))) as Amount;
 
 	b.disposals.push(
 		...pieces.map((c) => ({
@@ -175,16 +167,31 @@ const dispose = (b: Booking, p: BookedPosting, kind: DisposalKind, pieces: Piece
 	);
 };
 
-type Opening = Pick<Lot, 'origin' | 'date' | 'units' | 'cost' | 'source'>;
+type Opening = {
+	origin: LotOrigin;
+	units: Amount;
+	cost: Quantity;
+	date?: Temporal.PlainDate;
+	source?: number;
+};
 
+// A lot opens on its posting's day, from no other lot, unless a transfer brought it.
 const openLot = (b: Booking, p: BookedPosting, o: Opening) =>
-	b.lots.push({ ...o, key: b.lots.length, posting: p.id, account: p.account, remaining: o.units });
+	b.lots.push({
+		date: p.date,
+		source: null,
+		...o,
+		key: b.lots.length,
+		posting: p.id,
+		account: p.account,
+		remaining: o.units,
+	});
 
 // Takes units from each lot in turn, oldest first, until it has them all.
 const take = (lots: Lot[], units: Amount, side: bigint): Piece[] =>
 	lots.reduce<Piece[]>((pieces, lot) => {
 		const taken = min(
-			(units - total(pieces.map((c) => c.units))) as Amount,
+			(units - sum(pieces.map((c) => c.units))) as Amount,
 			(lot.remaining * side) as Amount,
 		);
 		if (taken === 0n) return pieces;
@@ -212,7 +219,3 @@ const inKind = (p: BookedPosting, g: BookedPosting[]) =>
 const movesInKind = (p: BookedPosting) => p.price === null && (p.amount < 0n || p.cost === null);
 
 const costOf = (p: BookedPosting): Quantity => unitPrice(p) ?? UNPRICED;
-
-const total = (a: Amount[]): Amount => a.reduce((t, x) => t + x, 0n) as Amount;
-
-const min = (a: Amount, b: Amount): Amount => (a < b ? a : b);

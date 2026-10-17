@@ -1,9 +1,15 @@
 import { defaultConfiguration } from '#lib/server/shared/context/config.ts';
 import { describe, expect, it } from 'vitest';
 import { BALANCE_TYPES } from '#services/ledger/domain/events.ts';
-import { book, type BookedPosting } from '#services/ledger/domain/lots.ts';
-import { parse } from '#services/ledger/domain/parser.ts';
-import { accountType, formatAmount, formatQuantity } from '#services/ledger/domain/types.ts';
+import { book, realised, type BookedPosting } from '#services/ledger/domain/lots.ts';
+import { parse, parseAmount } from '#services/ledger/domain/parser.ts';
+import {
+	accountType,
+	formatAmount,
+	formatQuantity,
+	type Amount,
+	type Quantity,
+} from '#services/ledger/domain/types.ts';
 
 // Each posting is named `line.position` after its transaction's header line.
 const booked = (lines: string[], commodity = 'INFY') => {
@@ -181,5 +187,26 @@ describe('moving in kind', () => {
 			lots: ['0 Assets:Groww 4.00 {0.00, 2025-01-10} unpriced left 4.00'],
 			disposals: ['1.0 transfer -4.00 from nothing'],
 		});
+	});
+});
+
+const amount = (text: string) => parseAmount(text) ?? (0n as Amount);
+const quantity = (text: string, commodity = 'INR'): Quantity => ({
+	amount: amount(text),
+	commodity,
+});
+
+describe('realised', () => {
+	it('gains the price over the cost on every unit a sale takes', () => {
+		expect(realised(amount('-4'), quantity('1700'), quantity('1500'))).toEqual(quantity('800'));
+	});
+
+	it('gains the cost over the price on every unit a cover returns', () => {
+		expect(realised(amount('4'), quantity('1600'), quantity('1700'))).toEqual(quantity('400'));
+	});
+
+	it('realises nothing without a price in the commodity of the cost', () => {
+		expect(realised(amount('-4'), null, quantity('1500'))).toBeNull();
+		expect(realised(amount('-4'), quantity('20', 'USD'), quantity('1500'))).toBeNull();
 	});
 });

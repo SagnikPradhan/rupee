@@ -55,14 +55,18 @@ const printPosting = (f: string | undefined, p: RupeePosting, elided: boolean): 
 	const line = [
 		p.account,
 		...(elided ? [] : [formatQuantity(p)]),
-		...(p.cost === null ? [] : [printCost(f, p.cost)]),
-		...(p.price === null ? [] : [PRICE_SIGN[p.price.kind], formatQuantity(p.price)]),
+		...printTerms(f, p),
 		...(p.balance === null
 			? []
 			: ['=', formatQuantity({ amount: p.balance, commodity: p.commodity })]),
 	].join(' ');
 	return `\t${line}\n${printMetadata('\t\t', p.metadata)}`;
 };
+
+const printTerms = (f: string | undefined, p: RupeePosting): string[] => [
+	...(p.cost === null ? [] : [printCost(f, p.cost)]),
+	...(p.price === null ? [] : [PRICE_SIGN[p.price.kind], formatQuantity(p.price)]),
+];
 
 const printCost = (f: string | undefined, c: LotCost): string =>
 	`{${[formatQuantity(c), ...(c.date ? [printDate(f, c.date)] : [])].join(', ')}}`;
@@ -81,12 +85,7 @@ const printDate = (f: string | undefined, d: Temporal.PlainDate) =>
 const printTime = (f: string | undefined, t: Temporal.PlainTime) =>
 	f ? dateFns.format(new Date(1970, 0, 1, t.hour, t.minute, t.second), f) : t.toString();
 
-export type PostingView = {
-	account: string;
-	amount: string;
-	cost: string | null;
-	price: string | null;
-};
+export type PostingView = { account: string; quantity: string };
 
 export type TransactionView = {
 	file: string;
@@ -109,7 +108,5 @@ export const viewTransaction = (t: RupeeTransaction): TransactionView => ({
 
 const viewPosting = (p: RupeePosting): PostingView => ({
 	account: p.account,
-	amount: formatQuantity(p),
-	cost: p.cost === null ? null : printCost(undefined, p.cost),
-	price: p.price === null ? null : `${PRICE_SIGN[p.price.kind]} ${formatQuantity(p.price)}`,
+	quantity: [formatQuantity(p), ...printTerms(undefined, p)].join(' '),
 });

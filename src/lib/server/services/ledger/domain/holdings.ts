@@ -1,7 +1,7 @@
-import { DEFAULT_COMMODITY, multiply, type Amount, type Quantity } from './types';
+import { DEFAULT_COMMODITY, hasLots, multiply, type Amount, type Quantity } from './types';
 
 // At most two prices reach rupees: `AAPL` in `USD`, then `USD` in rupees.
-const HOPS = 2;
+export const HOPS = 2;
 
 /** Units held now in one account, and what its open lots cost in all, when that is one commodity. */
 export type Holding = { account: string; commodity: string; units: Amount; cost: Quantity | null };
@@ -12,17 +12,12 @@ export const value = (h: Holding, prices: Record<string, Quantity>) => {
 
 	return {
 		...h,
+		lots: hasLots(h.commodity),
 		price: prices[h.commodity] ?? null,
 		value: worth,
 		gain: worth === null || paid === null ? null : ((worth - paid) as Amount),
 	};
 };
-
-// A sale or cover realises its price over the lot's cost, for every unit it takes.
-export const realised = (u: Amount, p: Quantity | null, c: Quantity): Amount | null =>
-	p === null || p.commodity !== c.commodity
-		? null
-		: multiply(-u as Amount, (p.amount - c.amount) as Amount);
 
 // Every account holding something, and every account above one, in tree order.
 export const accountTree = <H extends { account: string; value: Amount | null }>(holdings: H[]) =>

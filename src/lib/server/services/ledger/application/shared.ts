@@ -4,7 +4,6 @@ export { displayLocation, parse, parseAmount } from '../domain/parser';
 export { print, viewTransaction } from '../domain/printer';
 export {
 	AccountType,
-	CURRENCIES,
 	DEFAULT_COMMODITY,
 	accountType,
 	formatAmount,

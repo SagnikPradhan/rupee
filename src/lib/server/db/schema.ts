@@ -296,9 +296,9 @@ export const lots = PG.pgTable(
 		costCommodity: t.text().notNull(),
 	}),
 	(t) => [
-		PG.index('lots_ledger_id_account_commodity').on(t.ledgerId, t.account, t.commodity),
-		PG.index('lots_ledger_id_commodity').on(t.ledgerId, t.commodity),
+		PG.index('lots_ledger_id_commodity_account').on(t.ledgerId, t.commodity, t.account),
 		PG.index('lots_posting_id').on(t.postingId),
+		PG.index('lots_source_id').on(t.sourceId),
 	],
 );
 

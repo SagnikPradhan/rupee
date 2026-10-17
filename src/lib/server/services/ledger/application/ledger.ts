@@ -26,7 +26,8 @@ import {
 } from '../adapters/database';
 import { files, type Files } from '../adapters/storage';
 import { checkEvents, EventRole, linksOf } from '../domain/events';
-import { accountTree, realised, value, type Holding } from '../domain/holdings';
+import { accountTree, HOPS, value, type Holding } from '../domain/holdings';
+import { realised } from '../domain/lots';
 import { insertLinks, rewriteLinks, type LinkEdit, type Relink } from '../domain/links';
 import { displayLocation, parse } from '../domain/parser';
 import { indexedVersion, plan, type SyncPlan } from '../domain/sync';
@@ -35,6 +36,7 @@ import {
 	formatQuantity,
 	type Amount,
 	type Ledger,
+	type Quantity,
 	type RupeeFile,
 	type RupeeTransaction,
 } from '../domain/types';
@@ -121,22 +123,22 @@ const applyPlan = (files: Files, ledgerId: string, p: SyncPlan): ResultAsync<Rup
 		].map((s) => () => s().orElse((e) => ok([e]))),
 	);
 
-type ChangedKeys = { before: string[]; after: string[] };
-
 // Lots span files, so a change books again every commodity its files held,
 // before or after it, once the change is in place.
 const rebooking = (
 	ledgerId: string,
-	keys: ChangedKeys,
+	keys: { before: string[]; after: string[] },
 	change: () => ResultAsync<RupeeError[]>,
-): ResultAsync<RupeeError[]> =>
-	index(ledgerId)
+): ResultAsync<RupeeError[]> => {
+	if (keys.before.length === 0 && keys.after.length === 0) return change();
+
+	return index(ledgerId)
 		.lotCommodities(keys.before)
 		.andThen((h) =>
 			change().andThen((f) => rebookLots(ledgerId, h, keys.after).map((e) => [...f, ...e])),
 		);
+};
 
-// Evidence is not counted.
 const rebookLots = (ledgerId: string, held: string[], after: string[]) =>
 	index(ledgerId)
 		.lotCommodities(after)
@@ -144,10 +146,9 @@ const rebookLots = (ledgerId: string, held: string[], after: string[]) =>
 		.andThen((touched) =>
 			touched.length === 0
 				? okAsync([])
-				: index(ledgerId)
-						.eventMembers()
-						.map((m) => checkEvents(m).evidence)
-						.andThen((e) => sequence(touched.map((c) => () => rebookCommodity(ledgerId, c, e)))),
+				: evidence(ledgerId).andThen((e) =>
+						sequence(touched.map((c) => () => rebookCommodity(ledgerId, c, e))),
+					),
 		)
 		.orElse((e) => ok([e]));
 
@@ -156,6 +157,12 @@ const rebookCommodity = (l: string, c: string, e: string[]): ResultAsync<RupeeEr
 		.rebook(c, e)
 		.map((): RupeeError[] => [])
 		.orElse((x) => ok([x]));
+
+// Evidence is kept in the ledger but not counted.
+const evidence = (l: string): ResultAsync<string[]> =>
+	index(l)
+		.eventMembers()
+		.map((m) => checkEvents(m).evidence);
 
 // Events, balances and lots span files, so they are checked after every file is in place.
 const checkLedger = (ledgerId: string): ResultAsync<RupeeError[]> =>
@@ -232,28 +239,32 @@ export const getAccounts = (l: Ledger, day: Temporal.PlainDate) =>
 		),
 	);
 
-// Evidence is not counted.
 const valuedAccounts = (ledgerId: string, day: Temporal.PlainDate) =>
-	index(ledgerId)
-		.eventMembers()
-		.map((m) => checkEvents(m).evidence)
+	evidence(ledgerId)
 		.andThen((e) => index(ledgerId).holdings(e))
-		.andThen((h) => pricesOn(ledgerId, h, day).map((p) => accountTree(h.map((x) => value(x, p)))));
+		.andThen((h) =>
+			pricesOn(ledgerId, priced(h), day, HOPS).map((p) => accountTree(h.map((x) => value(x, p)))),
+		);
 
-// Prices of what is held and what it cost, then of the commodities those are priced in.
-const pricesOn = (ledgerId: string, held: Holding[], day: Temporal.PlainDate) => {
-	const commodities = held.flatMap((h) =>
-		h.cost ? [h.commodity, h.cost.commodity] : [h.commodity],
-	);
+const priced = (h: Holding[]) => [
+	...new Set(h.flatMap((x) => (x.cost ? [x.commodity, x.cost.commodity] : [x.commodity]))),
+];
+
+// Prices of the commodities, then of the commodities those are priced in, a hop at a time.
+const pricesOn = (
+	ledgerId: string,
+	commodities: string[],
+	day: Temporal.PlainDate,
+	hops: number,
+): ResultAsync<Record<string, Quantity>> => {
+	if (hops === 0 || commodities.length === 0) return okAsync({});
+
 	return index(ledgerId)
-		.latestPrices([...new Set(commodities)], day)
+		.latestPrices(commodities, day)
 		.andThen((p) =>
-			index(ledgerId)
-				.latestPrices(
-					Object.values(p).map((q) => q.commodity),
-					day,
-				)
-				.map((h) => ({ ...h, ...p })),
+			pricesOn(ledgerId, [...new Set(Object.values(p).map((q) => q.commodity))], day, hops - 1).map(
+				(r) => ({ ...r, ...p }),
+			),
 		);
 };
 

@@ -38,11 +38,7 @@
 			<tr>
 				<td>{posting.date}</td>
 				<td>{posting.account}</td>
-				<td
-					>{posting.amount}{posting.cost ? ` ${posting.cost}` : ''}{posting.price
-						? ` ${posting.price}`
-						: ''}</td
-				>
+				<td>{posting.quantity}</td>
 				<td>{posting.description}</td>
 				<td>{posting.source}</td>
 			</tr>

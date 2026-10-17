@@ -1,7 +1,6 @@
 import { replyFromBatch } from '#lib/server/shared/result/reply.ts';
 import * as Ledger from '#services/ledger/application/ledger.ts';
 import {
-	CURRENCIES,
 	displayLocation,
 	formatAmount,
 	formatQuantity,
@@ -22,7 +21,7 @@ export const getAccounts = query(Handle, async (h) => {
 				total: formatAmount(a.total),
 				holdings: a.holdings.map((x) => ({
 					commodity: x.commodity,
-					lots: !CURRENCIES.includes(x.commodity),
+					lots: x.lots,
 					units: formatQuantity({ amount: x.units, commodity: x.commodity }),
 					cost: x.cost && formatQuantity(x.cost),
 					price: x.price && formatQuantity(x.price),
@@ -56,10 +55,7 @@ export const getLots = query(Holding, async ({ handle, account, commodity }) => 
 					kind: d.kind,
 					units: formatAmount(d.units),
 					price: d.price && formatQuantity(d.price),
-					gain:
-						d.gain === null
-							? null
-							: formatQuantity({ amount: d.gain, commodity: l.cost.commodity }),
+					gain: d.gain && formatQuantity(d.gain),
 				})),
 			})),
 		})),

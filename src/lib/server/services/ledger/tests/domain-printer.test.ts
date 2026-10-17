@@ -326,8 +326,8 @@ describe('viewing a transaction', () => {
 			time: '18:45',
 			description: 'Bought shares',
 			postings: [
-				{ account: 'Assets:Broker', amount: '10.00 INFY', cost: null, price: '@ 1500.125' },
-				{ account: 'Assets:Bank', amount: '-15001.25', cost: null, price: null },
+				{ account: 'Assets:Broker', quantity: '10.00 INFY @ 1500.125' },
+				{ account: 'Assets:Bank', quantity: '-15001.25' },
 			],
 		});
 	});
@@ -340,7 +340,7 @@ describe('viewing a transaction', () => {
 				{ ...first!, price: { kind: PriceKind.Total, amount: amount('5'), commodity: 'USD' } },
 			],
 		};
-		expect(viewTransaction(priced).postings[0]?.price).toBe('@@ 5.00 USD');
+		expect(viewTransaction(priced).postings[0]?.quantity).toBe('10.00 INFY @@ 5.00 USD');
 	});
 
 	it('leaves an untimed transaction without a time', () => {
