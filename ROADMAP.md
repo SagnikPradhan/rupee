@@ -51,7 +51,7 @@
 
 ### Investments and loans
 
-- [ ] Track shares and funds: lots, cost basis, prices, holdings
+- [x] Track shares and funds: lots, cost basis, prices, holdings
 - [ ] Track loans: what's left, and the interest in each payment
 - [ ] Report capital gains for an Indian financial year
 - [ ] Track currency gains on foreign money spent on foreign shares

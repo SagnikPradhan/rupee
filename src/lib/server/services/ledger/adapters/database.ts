@@ -862,6 +862,85 @@ const latestPrices =
 			),
 		);
 
+const sourceLot = alias(lotTable, 'source_lot');
+
+// Every lot an account has held of a commodity, open or not, with what was taken from it.
+const lotsIn = (ledgerId: string) => (account: string, commodity: string) =>
+	withContext('db')((db) =>
+		attempt(async () => {
+			const lots = await db
+				.select({
+					id: lotTable.id,
+					file: ledgerFiles.key,
+					line: transactionTable.line,
+					date: lotTable.date,
+					origin: lotTable.origin,
+					from: sourceLot.account,
+					units: lotTable.units,
+					remaining: lotTable.remaining,
+					costAmount: lotTable.costAmount,
+					costCommodity: lotTable.costCommodity,
+				})
+				.from(lotTable)
+				.innerJoin(postings, eq(postings.id, lotTable.postingId))
+				.innerJoin(transactionTable, eq(transactionTable.id, postings.transactionId))
+				.innerJoin(ledgerFiles, eq(ledgerFiles.id, transactionTable.fileId))
+				.leftJoin(sourceLot, eq(sourceLot.id, lotTable.sourceId))
+				.where(
+					and(
+						eq(lotTable.ledgerId, ledgerId),
+						eq(lotTable.account, account),
+						eq(lotTable.commodity, commodity),
+					),
+				)
+				.orderBy(asc(lotTable.date), asc(ledgerFiles.key), asc(transactionTable.line));
+			const taken = await db
+				.select({
+					lot: disposalTable.lotId,
+					file: ledgerFiles.key,
+					line: transactionTable.line,
+					date: transactionTable.date,
+					kind: disposalTable.kind,
+					units: disposalTable.units,
+					priceAmount: disposalTable.priceAmount,
+					priceCommodity: disposalTable.priceCommodity,
+				})
+				.from(disposalTable)
+				.innerJoin(postings, eq(postings.id, disposalTable.postingId))
+				.innerJoin(transactionTable, eq(transactionTable.id, postings.transactionId))
+				.innerJoin(ledgerFiles, eq(ledgerFiles.id, transactionTable.fileId))
+				.where(
+					inArray(
+						disposalTable.lotId,
+						lots.map((l) => l.id),
+					),
+				)
+				.orderBy(asc(transactionTable.date), asc(ledgerFiles.key), asc(transactionTable.line));
+
+			return lots.map((l) => ({
+				location: { file: l.file, line: l.line },
+				date: Temporal.PlainDate.from(l.date),
+				origin: l.origin,
+				from: l.from,
+				units: l.units as Amount,
+				remaining: l.remaining as Amount,
+				cost: { amount: l.costAmount as Amount, commodity: l.costCommodity },
+				disposals: taken
+					.filter((d) => d.lot === l.id)
+					.map((d) => ({
+						location: { file: d.file, line: d.line },
+						date: Temporal.PlainDate.from(d.date),
+						kind: d.kind,
+						units: d.units as Amount,
+						price: toQuantity(d.priceAmount, d.priceCommodity),
+					})),
+			}));
+		}),
+	);
+
+const toQuantity = (a: bigint | null, c: string | null): Quantity | null =>
+	a === null || c === null ? null : { amount: a as Amount, commodity: c };
+
 type MetadataRow = { owner: string | null; key: string; value: string };
 
 // Rows come in written order, which `toMetadata` keeps.
@@ -889,6 +968,7 @@ export const index = (ledgerId: string) => ({
 	rebook: rebook(ledgerId),
 	holdings: holdings(ledgerId),
 	latestPrices: latestPrices(ledgerId),
+	lotsIn: lotsIn(ledgerId),
 	unmatched: unmatched(ledgerId),
 	transactions: transactions(ledgerId),
 });

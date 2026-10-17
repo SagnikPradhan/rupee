@@ -18,6 +18,12 @@ export const value = (h: Holding, prices: Record<string, Quantity>) => {
 	};
 };
 
+// A sale or cover realises its price over the lot's cost, for every unit it takes.
+export const realised = (u: Amount, p: Quantity | null, c: Quantity): Amount | null =>
+	p === null || p.commodity !== c.commodity
+		? null
+		: multiply(-u as Amount, (p.amount - c.amount) as Amount);
+
 // Every account holding something, and every account above one, in tree order.
 export const accountTree = <H extends { account: string; value: Amount | null }>(holdings: H[]) =>
 	[...new Set(holdings.flatMap((h) => ancestors(h.account)))].toSorted(bySegments).map((a) => {

@@ -914,4 +914,43 @@ describe('accounts', () => {
 				{ commodity: 'USD', value: 49800_000_000n, gain: null },
 			]);
 		}));
+
+	it('lists the lots an account held, with what each disposal realised', ({ context, db }) =>
+		provide(context, async () => {
+			const ledger = await createLedger(db);
+			const content = [
+				'2026-01-02 Buy',
+				'\tAssets:Zerodha 10 INFY @ 1500',
+				'\tAssets:Bank',
+				'',
+				'2026-03-01 Sell',
+				'\tAssets:Zerodha -4 INFY {1500} @ 1700',
+				'\tAssets:Bank 6800',
+				'\tIncome:Gains -800',
+				'',
+				'2026-04-01 Move',
+				'\tAssets:Zerodha -6 INFY',
+				'\tAssets:Groww 6 INFY',
+				'',
+			].join('\n');
+			await Ledger.createFile({ ledger, key: 'a.rupee', content });
+
+			const zerodha = (await Ledger.getLots(ledger, 'Assets:Zerodha', 'INFY'))._unsafeUnwrap();
+			expect(zerodha.succeeded).toMatchObject([
+				{
+					location: { file: 'a.rupee', line: 1 },
+					origin: 'buy',
+					remaining: 0n,
+					disposals: [
+						{ kind: 'sale', units: -4_000_000n, gain: 800_000_000n },
+						{ kind: 'transfer', units: -6_000_000n, price: null, gain: null },
+					],
+				},
+			]);
+
+			const groww = (await Ledger.getLots(ledger, 'Assets:Groww', 'INFY'))._unsafeUnwrap();
+			expect(groww.succeeded).toMatchObject([
+				{ origin: 'transfer', from: 'Assets:Zerodha', remaining: 6_000_000n, disposals: [] },
+			]);
+		}));
 });

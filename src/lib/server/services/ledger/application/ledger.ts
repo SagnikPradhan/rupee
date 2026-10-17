@@ -26,7 +26,7 @@ import {
 } from '../adapters/database';
 import { files, type Files } from '../adapters/storage';
 import { checkEvents, EventRole, linksOf } from '../domain/events';
-import { accountTree, value, type Holding } from '../domain/holdings';
+import { accountTree, realised, value, type Holding } from '../domain/holdings';
 import { insertLinks, rewriteLinks, type LinkEdit, type Relink } from '../domain/links';
 import { displayLocation, parse } from '../domain/parser';
 import { indexedVersion, plan, type SyncPlan } from '../domain/sync';
@@ -256,6 +256,23 @@ const pricesOn = (ledgerId: string, held: Holding[], day: Temporal.PlainDate) =>
 				.map((h) => ({ ...h, ...p })),
 		);
 };
+
+// The lots an account has held of a commodity, and the gain each disposal realised.
+export const getLots = (l: Ledger, account: string, commodity: string) =>
+	syncFiles(l).andThen((f) =>
+		index(l.id)
+			.lotsIn(account, commodity)
+			.map((lots) => ({
+				succeeded: lots.map((lot) => ({
+					...lot,
+					disposals: lot.disposals.map((d) => ({
+						...d,
+						gain: realised(d.units, d.price, lot.cost),
+					})),
+				})),
+				failed: f,
+			})),
+	);
 
 type Counting = { batch: Batch<CountedTransaction>; evidence: string[] };
 

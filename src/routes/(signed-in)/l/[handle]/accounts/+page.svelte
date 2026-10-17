@@ -4,6 +4,9 @@
 	const { data } = $props();
 
 	const response = $derived(await getAccounts(data.ledger.handle));
+
+	const lotsOf = (account: string, commodity: string) =>
+		`/l/${data.ledger.handle}/accounts/lots?${new URLSearchParams({ account, commodity })}`;
 </script>
 
 <h1>Accounts</h1>
@@ -32,7 +35,13 @@
 			</tr>
 			{#each account.holdings as holding (holding.commodity)}
 				<tr>
-					<td style:padding-left="{account.depth + 1}em">{holding.commodity}</td>
+					<td style:padding-left="{account.depth + 1}em">
+						{#if holding.lots}
+							<a href={lotsOf(account.account, holding.commodity)}>{holding.commodity}</a>
+						{:else}
+							{holding.commodity}
+						{/if}
+					</td>
 					<td>{holding.units}</td>
 					<td>{holding.cost ?? ''}</td>
 					<td>{holding.price ?? ''}</td>

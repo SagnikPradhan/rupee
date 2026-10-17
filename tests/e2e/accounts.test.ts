@@ -6,6 +6,11 @@ const ledgerFile = [
 	'\tAssets:Zerodha 10 INFY @ 1500',
 	'\tAssets:Bank',
 	'',
+	'2026-03-01 Sell',
+	'\tAssets:Zerodha -4 INFY {1500} @ 1700',
+	'\tAssets:Bank 6800',
+	'\tIncome:Gains -800',
+	'',
 	'2026-04-01 Bonus',
 	'\tAssets:Zerodha 1 TCS',
 	'\tIncome:Bonus -1 TCS',
@@ -24,10 +29,17 @@ test('shows what each account holds and what it is worth', async ({ signedIn: pa
 
 	await visit(page, `${ledger}/accounts`);
 	await expect(page.getByRole('row', { name: 'Assets:Zerodha' })).toContainText(
-		'18000.00 (excludes 1 unpriced)',
+		'10800.00 (excludes 1 unpriced)',
 	);
 	const infy = page.getByRole('row').filter({ hasText: 'INFY' });
-	for (const cell of ['10.00 INFY', '15000.00', '1800.00', '18000.00', '3000.00'])
+	for (const cell of ['6.00 INFY', '9000.00', '1800.00', '10800.00', '1800.00'])
 		await expect(infy).toContainText(cell);
 	await expect(page.getByRole('row').filter({ hasText: 'TCS' })).toContainText('unpriced');
+
+	await page.getByRole('link', { name: 'INFY' }).click();
+	await expect(page.getByRole('heading', { name: 'INFY in Assets:Zerodha' })).toBeVisible();
+	await expect(page.getByRole('article', { name: 'Lot of 2026-01-02' })).toContainText(
+		'buy at shares.rupee:1, 6.00 left',
+	);
+	await expect(page.getByRole('row').filter({ hasText: 'sale' })).toContainText('800.00');
 });
