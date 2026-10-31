@@ -419,13 +419,15 @@ const readLink = (
 	{ location, content }: RupeaLine,
 ): Result<RupeaLink> | null => {
 	const { feed = '', symbol = '' } = LINK.exec(content)?.groups ?? {};
+	if (!symbol) return null;
+
 	const words = content.trim().split(/\s+/).slice(1, -1);
 	const since =
 		words[0] === '*'
 			? { value: null, rest: words.slice(1) }
 			: readWords(dateFormats, words, parseDate);
 	const [commodity = '', ...extra] = since?.rest ?? [];
-	if (!symbol || !since || !COMMODITY.test(commodity) || extra.length > 0) return null;
+	if (!since || !COMMODITY.test(commodity) || extra.length > 0) return null;
 
 	const linked = LINKED[feed.toLowerCase()];
 	if (!linked) return err(fault('ParseUnknownFeed', { location: displayLocation(location), feed }));

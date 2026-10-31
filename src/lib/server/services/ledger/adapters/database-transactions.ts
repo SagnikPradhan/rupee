@@ -11,19 +11,11 @@ import type { Amount } from '../domain/amounts';
 import { GROUP_KEYS } from '../domain/groups';
 import { toMetadata } from '../domain/nodes';
 import type { Neighbour } from '../domain/prediction';
-import { CURRENCIES } from '../domain/lots';
 import { BALANCE_TYPES } from '../domain/taxonomy';
 import type { Filled, Unembedded } from '../domain/text';
 import type { RupeaMetadata, RupeaTransaction } from '../domain/types';
-import type { Touched } from './database-files';
-import {
-	listingKey,
-	newestFirst,
-	toCost,
-	toPrice,
-	toSpans,
-	underAccount,
-} from './database-queries';
+import { touchedBy, type Touched } from './database-files';
+import { listingKey, newestFirst, toCost, toPrice, underAccount } from './database-queries';
 
 // Transactions searched near each line; the domain keeps the best few postings.
 const NEAREST = 50;
@@ -145,7 +137,8 @@ export const recount = (ledgerId: string, uncounted: string[]): ResultAsync<Touc
 					.returning('id')
 					.execute();
 				const changed = [...counting, ...uncounting].map((t) => t.id);
-				if (changed.length === 0) return { commodities: [], spans: [] };
+				if (changed.length === 0)
+					return { commodities: [], spans: [], positions: [], grouped: false };
 
 				await tx
 					.updateTable('postings')
@@ -155,23 +148,7 @@ export const recount = (ledgerId: string, uncounted: string[]): ResultAsync<Touc
 					.where((e) => anyOf(e.ref('transactions.id'), changed, 'uuid'))
 					.execute();
 
-				const lots = await tx
-					.selectFrom('postings')
-					.select('commodity')
-					.distinct()
-					.where((e) => anyOf(e.ref('transactionId'), changed, 'uuid'))
-					.where('accountType', 'in', BALANCE_TYPES)
-					.where((e) => noneOf(e.ref('commodity'), CURRENCIES, 'text'))
-					.execute();
-				const days = await tx
-					.selectFrom('transactions')
-					.select((e) => [
-						e.fn.min<string | null>('date').as('from'),
-						e.fn.max<string | null>('date').as('to'),
-					])
-					.where((e) => anyOf(e.ref('id'), changed, 'uuid'))
-					.executeTakeFirstOrThrow();
-				return { commodities: lots.map((c) => c.commodity), spans: toSpans(days) };
+				return touchedBy(tx, changed);
 			}),
 		),
 	);

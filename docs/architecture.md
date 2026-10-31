@@ -68,8 +68,8 @@ A sync brings the index up to date with the files, and it is the one way that ha
 
 1. **Lock.** Take the ledger's lock inside a transaction, so it is the only writer.
 2. **Plan.** List storage and compare each file's version with the one indexed. A file also counts as changed if an older `INDEXER` read it.
-3. **Index.** Parse each changed file and replace its rows, and remove the rows of files that are gone. Each file runs in a savepoint, so one that fails is reported and leaves the others.
-4. **Settle.** Work out what spans files: which transactions a group leaves uncounted, then lots, monthly totals and balance checks for what was touched.
+3. **Index.** Parse each changed file and write only the rows that differ, and remove the rows of files that are gone. Each file runs in a savepoint, so one that fails is reported and leaves the others.
+4. **Settle.** Work out what spans files for what the transactions that changed touched: which transactions a group leaves uncounted, if any of them names a group, then lots, and monthly totals and balance checks for the accounts and commodities they post to.
 5. **Follow up.** After the lock, queue quote fetches and embed descriptions.
 
 A transaction keeps its id through this while its date, time and description stay the same, so a page cursor stays valid.

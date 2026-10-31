@@ -13,8 +13,9 @@ describe('files', () => {
 
 		const listed = await provide(context, () => Files.listFiles(ledger));
 		const keys = listed._unsafeUnwrap().succeeded.map((f) => f.key);
-		const oldest = keys.find((k) => k !== 'opening.rupea') ?? '';
-		const newest = keys.at(-1) ?? '';
+		const dated = keys.filter((k) => k !== 'opening.rupea');
+		const oldest = dated.at(0) ?? '';
+		const newest = dated.at(-1) ?? '';
 		const edits: number[] = [];
 		const imports: number[] = [];
 
@@ -25,7 +26,7 @@ describe('files', () => {
 						ledger,
 						key,
 						version: f.version,
-						content: `${f.content}\n${entryOf(edits.push(edits.length))}`,
+						content: `${f.content}\n${entryOf(dayIn(key), edits.push(edits.length))}`,
 					}),
 				),
 			);
@@ -46,8 +47,14 @@ describe('files', () => {
 	});
 });
 
-const entryOf = (n: number) =>
-	`2026-10-21 Bench edit ${n}\n\tExpenses:Bench ${n + 1}\n\tAssets:Bank\n`;
+/** A day inside a yearly or monthly file, as an entry dated elsewhere would stretch what the file spans. */
+const dayIn = (key: string) => {
+	const period = key.replace('.rupea', '');
+	return period.length === 4 ? `${period}-06-15` : `${period}-15`;
+};
+
+const entryOf = (d: string, n: number) =>
+	`${d} Bench edit ${n}\n\tExpenses:Bench ${n + 1}\n\tAssets:Bank\n`;
 
 const statementOf = (n: number) =>
-	Array.from({ length: STATEMENT }, (_, i) => entryOf(n * STATEMENT + i)).join('\n');
+	Array.from({ length: STATEMENT }, (_, i) => entryOf('2026-10-21', n * STATEMENT + i)).join('\n');

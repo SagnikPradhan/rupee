@@ -40,7 +40,7 @@
 			save: async (input) => {
 				const saved = await editFile({ handle, ...input });
 				if (saved.ok)
-					await Promise.all([refine(input.key), listGroups({ handle, file: input.key }).refresh()]);
+					void Promise.all([refine(input.key), listGroups({ handle, file: input.key }).refresh()]);
 				return saved;
 			},
 			create: (input) => createFile({ handle, ...input }),

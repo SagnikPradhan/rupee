@@ -10,6 +10,7 @@ import { byCodeUnit } from '#lib/server/shared/text.ts';
 import type { Span } from '#lib/shared/dates.ts';
 import { sql, type SqlBool } from 'kysely';
 import { v7 as uuidv7 } from 'uuid';
+import { GROUP_KEYS } from '../domain/groups';
 import { CURRENCIES } from '../domain/lots';
 import { displayLocation } from '../domain/parser';
 import { marketPrices } from '../domain/prices';
@@ -81,10 +82,17 @@ type IndexFileOptions = {
 	failed: RupeaError[];
 };
 
-/** What changing a file touched: the commodities whose lots it held before or holds now, and the days its transactions span. */
-export type Touched = { commodities: string[]; spans: Span[] };
+export type Position = { accountId: string; commodity: string };
 
-/** Replaces what a file indexes and what failed to parse in it, each transaction keeping its id where it can and each description its embedding, so saving a file neither moves a page nor re-embeds it. */
+/** What changing a file touched: the commodities whose lots it held before or holds now, the days its transactions span, what they post to, and whether any names a group. */
+export type Touched = {
+	commodities: string[];
+	spans: Span[];
+	positions: Position[];
+	grouped: boolean;
+};
+
+/** Replaces what a file indexes and what failed to parse in it, each transaction keeping its id where it can and each description its embedding, so saving a file neither moves a page nor re-embeds it. Transactions that hold what they held keep their rows, so a small edit writes little. */
 export const indexFile = (
 	ledgerId: string,
 	{ key, version, file, failed }: IndexFileOptions,
@@ -95,9 +103,10 @@ export const indexFile = (
 	return atomically(() =>
 		withContext('db')((tx) =>
 			attempt(async () => {
+				const readBy = await indexerOf(tx, ledgerId, key);
 				const fileId = await saveVersion(tx, { ledgerId, key, version });
 				const old = await oldTransactions(tx, fileId);
-				const rows = rowsOf({ ledgerId, fileId, file, idOf: idsFrom(old) });
+				const rows = rowsOf({ ledgerId, fileId, file, matchOf: matchesFrom(old) });
 				const kept = new Set(rows.transactions.map((t) => t.id));
 				const unmatched = old.map((o) => o.id).filter((id) => !kept.has(id));
 				const postings = await withAccounts(tx, ledgerId, rows.postings);
@@ -110,28 +119,43 @@ export const indexFile = (
 					error: e,
 				}));
 
-				const lotsBefore = await lotCommoditiesOf(tx, fileId);
-				const spansBefore = await spansOf(tx, fileId);
+				const changes = changesFrom({
+					old,
+					heldBefore: readBy === INDEXER ? await heldIn(tx, fileId) : () => '',
+					transactions: rows.transactions,
+					postings,
+					metadata: rows.metadata,
+				});
+				const priceChanges = priceChangesFrom(
+					await oldPrices(tx, fileId),
+					prices,
+					readBy === INDEXER,
+				);
+				const before = await touchedBy(tx, [...changes.moved, ...changes.stale, ...unmatched]);
 
 				await tx.deleteFrom('metadata').where('fileId', '=', fileId).execute();
-				await tx.deleteFrom('prices').where('fileId', '=', fileId).execute();
+				await tx
+					.deleteFrom('prices')
+					.where((e) => anyOf(e.ref('id'), priceChanges.stale, 'uuid'))
+					.execute();
 				await tx.deleteFrom('symbolLinks').where('fileId', '=', fileId).execute();
 				await tx.deleteFrom('problems').where('fileId', '=', fileId).execute();
-				await deleteOwnedBy(tx, fileId);
+				await deleteOwnedBy(tx, changes.stale);
 
-				await saveTransactions(tx, rows.transactions);
+				await saveTransactions(tx, changes.transactions);
 				await replaceOldTransactions(tx, fileId, unmatched);
-				await insertAll(tx, 'postings', postings);
-				await insertAll(tx, 'prices', prices);
+				await insertAll(tx, 'postings', changes.postings);
+				await insertAll(tx, 'prices', priceChanges.added);
 				await insertAll(tx, 'symbolLinks', links);
-				await insertAll(tx, 'metadata', rows.metadata);
+				await insertAll(tx, 'metadata', changes.metadata);
 				await insertAll(tx, 'problems', problems);
 
-				const lotsAfter = await lotCommoditiesOf(tx, fileId);
-				const spansAfter = await spansOf(tx, fileId);
+				const after = await touchedBy(tx, [...changes.moved, ...changes.stale, ...changes.added]);
 				return {
-					commodities: [...lotsBefore, ...lotsAfter],
-					spans: [...spansBefore, ...spansAfter],
+					commodities: [...before.commodities, ...after.commodities],
+					spans: [...before.spans, ...after.spans],
+					positions: [...before.positions, ...after.positions],
+					grouped: before.grouped || after.grouped,
 				};
 			}),
 		),
@@ -148,17 +172,20 @@ export const unindexFile = (ledgerId: string, key: string): ResultAsync<Touched>
 					.where('ledgerFiles.ledgerId', '=', ledgerId)
 					.where('ledgerFiles.key', '=', key)
 					.executeTakeFirst();
-				if (!file) return { commodities: [], spans: [] };
+				if (!file) return { commodities: [], spans: [], positions: [], grouped: false };
 
-				const commodities = await lotCommoditiesOf(tx, file.id);
-				const spans = await spansOf(tx, file.id);
+				const held = await oldTransactions(tx, file.id);
+				const touched = await touchedBy(
+					tx,
+					held.map((t) => t.id),
+				);
 				await tx.deleteFrom('ledgerFiles').where('id', '=', file.id).execute();
-				return { commodities, spans };
+				return touched;
 			}),
 		),
 	);
 
-/** A key spans no days, so a rename touches only the commodities whose lots the file holds. */
+/** A key spans no days and changes no amount or group, so a rename touches only the commodities whose lots the file holds. */
 export const renameIndexedFile = (
 	ledgerId: string,
 	from: string,
@@ -174,7 +201,7 @@ export const renameIndexedFile = (
 				.returning('id')
 				.executeTakeFirst()
 				.then((f) => (f ? lotCommoditiesOf(db, f.id) : []))
-				.then((c) => ({ commodities: c, spans: [] })),
+				.then((c) => ({ commodities: c, spans: [], positions: [], grouped: false })),
 		),
 	);
 
@@ -193,6 +220,16 @@ const untypedAccount = (file: RupeaLedgerFile): RupeaError | null =>
 		)
 		.at(0) ?? null;
 
+/** A file an older indexer read has all its rows written again, as that is what a new indexer is for. */
+const indexerOf = (db: Database, ledgerId: string, key: string) =>
+	db
+		.selectFrom('ledgerFiles')
+		.select('indexer')
+		.where('ledgerId', '=', ledgerId)
+		.where('key', '=', key)
+		.executeTakeFirst()
+		.then((f) => f?.indexer);
+
 type VersionOptions = { ledgerId: string; key: string; version: string };
 
 const saveVersion = (db: Database, { ledgerId, key, version }: VersionOptions) =>
@@ -209,30 +246,213 @@ type OldTransaction = {
 	date: string;
 	time: string | null;
 	description: string;
+	line: number;
+	comment: string | null;
+	counted: boolean;
 };
 
 const oldTransactions = (db: Database, fileId: string): Promise<OldTransaction[]> =>
 	db
 		.selectFrom('transactions')
-		.select(['id', 'date', 'time', 'description'])
+		.select(['id', 'date', 'time', 'description', 'line', 'comment', 'counted'])
 		.where('fileId', '=', fileId)
 		.orderBy('line')
 		.execute();
 
-/** Hands out old ids by date, time and description, in file order, so an edit or a line added above keeps them; a new id otherwise. */
-const idsFrom = (old: OldTransaction[]) => {
+/** Hands out old transactions by date, time and description, in file order, so an edit or a line added above keeps them. */
+const matchesFrom = (old: OldTransaction[]) => {
 	const free = Object.groupBy(old, (o) => `${o.date} ${o.time} ${o.description}`);
 
-	return (t: RupeaTransaction) =>
-		free[`${t.date} ${t.time ?? null} ${t.description}`]?.shift()?.id ?? uuidv7();
+	return (t: RupeaTransaction) => free[`${t.date} ${t.time ?? null} ${t.description}`]?.shift();
 };
 
-/** A kept transaction gets its postings and metadata anew, as a deleted one loses them by cascade. */
-const deleteOwnedBy = async (db: Database, fileId: string) => {
-	const owners = db.selectFrom('transactions').select('id').where('fileId', '=', fileId);
+type PostingHeld = {
+	id: string;
+	transactionId: string;
+	position: number;
+	accountId: string;
+	amount: bigint;
+	commodity: string;
+	priceAmount: bigint | null;
+	priceCommodity: string | null;
+	priceKind: string | null;
+	costAmount: bigint | null;
+	costCommodity: string | null;
+	costDate: string | null;
+	balance: bigint | null;
+	comment: string | null;
+};
 
-	await db.deleteFrom('metadata').where('transactionId', 'in', owners).execute();
-	await db.deleteFrom('postings').where('transactionId', 'in', owners).execute();
+type MetadataHeld = {
+	transactionId?: string | null;
+	postingId?: string | null;
+	position: number;
+	key: string;
+	value: string;
+};
+
+/** What a transaction holds beyond its own row, as text to compare: its postings and all their metadata. */
+const heldFrom = (postings: PostingHeld[], metadata: MetadataHeld[]) => {
+	const entries = (rows: MetadataHeld[] = []) => rows.map((m) => [m.position, m.key, m.value]);
+	const byTransaction = Object.groupBy(postings, (p) => p.transactionId);
+	const onTransaction = Object.groupBy(metadata, (m) => m.transactionId ?? '');
+	const onPosting = Object.groupBy(metadata, (m) => m.postingId ?? '');
+
+	return (id: string) =>
+		JSON.stringify(
+			[
+				entries(onTransaction[id]),
+				(byTransaction[id] ?? []).map((p) => [
+					p.position,
+					p.accountId,
+					p.amount,
+					p.commodity,
+					p.priceAmount,
+					p.priceCommodity,
+					p.priceKind,
+					p.costAmount,
+					p.costCommodity,
+					p.costDate,
+					p.balance,
+					p.comment,
+					entries(onPosting[p.id]),
+				]),
+			],
+			(_, v) => (typeof v === 'bigint' ? v.toString() : v),
+		);
+};
+
+const heldIn = async (db: Database, fileId: string) => {
+	const owners = db.selectFrom('transactions').select('id').where('fileId', '=', fileId);
+	const owned = db.selectFrom('postings').select('id').where('transactionId', 'in', owners);
+
+	const postings = await db
+		.selectFrom('postings')
+		.select([
+			'id',
+			'transactionId',
+			'position',
+			'accountId',
+			'amount',
+			'commodity',
+			'priceAmount',
+			'priceCommodity',
+			'priceKind',
+			'costAmount',
+			'costCommodity',
+			'costDate',
+			'balance',
+			'comment',
+		])
+		.where('transactionId', 'in', owners)
+		.orderBy('position')
+		.execute();
+	const onTransactions = await db
+		.selectFrom('metadata')
+		.select(['transactionId', 'postingId', 'position', 'key', 'value'])
+		.where('transactionId', 'in', owners)
+		.orderBy('position')
+		.execute();
+	const onPostings = await db
+		.selectFrom('metadata')
+		.select(['transactionId', 'postingId', 'position', 'key', 'value'])
+		.where('postingId', 'in', owned)
+		.orderBy('position')
+		.execute();
+
+	return heldFrom(postings, [...onTransactions, ...onPostings]);
+};
+
+type PriceHeld = {
+	symbolId: string;
+	line: number | null;
+	date: string;
+	priceAmount: bigint;
+	priceCommodity: string;
+	source: string;
+};
+
+const oldPrices = (db: Database, fileId: string) =>
+	db
+		.selectFrom('prices')
+		.select(['id', 'symbolId', 'line', 'date', 'priceAmount', 'priceCommodity', 'source'])
+		.where('fileId', '=', fileId)
+		.execute();
+
+const priceKey = (p: PriceHeld) =>
+	`${p.symbolId} ${p.line} ${p.date} ${p.priceAmount} ${p.priceCommodity} ${p.source}`;
+
+/** Of a file's prices, those to delete and those to add; all of them when an older indexer read it. */
+const priceChangesFrom = <P extends PriceHeld>(
+	old: (PriceHeld & { id: string })[],
+	prices: P[],
+	current: boolean,
+) => {
+	if (!current) return { stale: old.map((o) => o.id), added: prices };
+
+	const free = Object.groupBy(old, priceKey);
+	const added = prices.filter((p) => !free[priceKey(p)]?.shift());
+
+	return { stale: Object.values(free).flatMap((g) => (g ?? []).map((o) => o.id)), added };
+};
+
+type ChangesOptions<P, M> = {
+	old: OldTransaction[];
+	heldBefore: (id: string) => string;
+	transactions: TransactionRow[];
+	postings: P[];
+	metadata: M[];
+};
+
+/** Of a file's rows, only those to write: a transaction's own when new or on another line, and what it holds when that differs. Moved are those whose order changed, which lots and assertions depend on. */
+const changesFrom = <P extends PostingHeld, M extends MetadataHeld>({
+	old,
+	heldBefore,
+	transactions,
+	postings,
+	metadata,
+}: ChangesOptions<P, M>) => {
+	const heldNow = heldFrom(postings, metadata);
+	const before = Object.fromEntries(old.map((o) => [o.id, o]));
+
+	const added = transactions.filter((t) => !before[t.id]).map((t) => t.id);
+	const stale = transactions
+		.filter((t) => before[t.id] && heldBefore(t.id) !== heldNow(t.id))
+		.map((t) => t.id);
+	const rewritten = new Set([...added, ...stale]);
+	const written = postings.filter((p) => rewritten.has(p.transactionId));
+	const posted = new Set(written.map((p) => p.id));
+	const kept = transactions.filter((t) => before[t.id]);
+	const keptIds = new Set(kept.map((t) => t.id));
+	const keptBefore = old.filter((o) => keptIds.has(o.id));
+
+	return {
+		added,
+		stale,
+		moved: kept.filter((t, i) => keptBefore[i]?.id !== t.id).map((t) => t.id),
+		transactions: transactions.filter((t) => {
+			const o = before[t.id];
+			return !o || o.line !== t.line || o.comment !== t.comment;
+		}),
+		postings: written,
+		metadata: metadata.filter((m) => {
+			if (m.postingId) return posted.has(m.postingId);
+			if (m.transactionId) return rewritten.has(m.transactionId);
+			return true;
+		}),
+	};
+};
+
+/** Deleting a posting takes its metadata, lots and disposals with it by cascade. */
+const deleteOwnedBy = async (db: Database, transactions: string[]) => {
+	await db
+		.deleteFrom('metadata')
+		.where((e) => anyOf(e.ref('transactionId').$notNull(), transactions, 'uuid'))
+		.execute();
+	await db
+		.deleteFrom('postings')
+		.where((e) => anyOf(e.ref('transactionId'), transactions, 'uuid'))
+		.execute();
 };
 
 type TransactionRow = {
@@ -244,9 +464,10 @@ type TransactionRow = {
 	time: string | null;
 	description: string;
 	comment: string | null;
+	counted: boolean;
 };
 
-/** A kept transaction counts again until files settle, as a new one does, and keeps its embedding. */
+/** A kept transaction keeps whether it counts, which settling decides, and its embedding. */
 const saveTransactions = async (db: Database, rows: TransactionRow[]) => {
 	for (const chunk of chunks(rows, ROWS_PER_STATEMENT))
 		await db // NOSONAR -- a transaction's statements share one connection, so they run in turn
@@ -256,7 +477,6 @@ const saveTransactions = async (db: Database, rows: TransactionRow[]) => {
 				o.column('id').doUpdateSet((e) => ({
 					line: e.ref('excluded.line'),
 					comment: e.ref('excluded.comment'),
-					counted: true,
 				})),
 			)
 			.execute();
@@ -266,19 +486,25 @@ type RowsOptions = {
 	ledgerId: string;
 	fileId: string;
 	file: RupeaLedgerFile;
-	idOf: (t: RupeaTransaction) => string;
+	matchOf: (t: RupeaTransaction) => OldTransaction | undefined;
 };
 
 /** Each table's rows for a parsed file, its prices and links still to be put on their symbols. */
-const rowsOf = ({ ledgerId, fileId, file, idOf }: RowsOptions) => {
-	const indexed = file.transactions.map((t) => ({
-		id: idOf(t),
-		transaction: t,
-		postings: t.postings.map((p) => ({ id: uuidv7(), posting: p })),
-	}));
+const rowsOf = ({ ledgerId, fileId, file, matchOf }: RowsOptions) => {
+	const indexed = file.transactions.map((t) => {
+		const match = matchOf(t);
 
-	const transactions = indexed.map(({ id, transaction }) => ({
+		return {
+			id: match?.id ?? uuidv7(),
+			counted: match?.counted ?? true,
+			transaction: t,
+			postings: t.postings.map((p) => ({ id: uuidv7(), posting: p })),
+		};
+	});
+
+	const transactions = indexed.map(({ id, counted, transaction }) => ({
 		id,
+		counted,
 		ledgerId,
 		fileId,
 		line: transaction.location.line,
@@ -287,7 +513,7 @@ const rowsOf = ({ ledgerId, fileId, file, idOf }: RowsOptions) => {
 		description: transaction.description,
 		comment: transaction.comment,
 	}));
-	const postings = indexed.flatMap(({ id, transaction, postings: p }) =>
+	const postings = indexed.flatMap(({ id, counted, transaction, postings: p }) =>
 		p.flatMap(({ id: postingId, posting }, position) => {
 			const type = accountType(posting.account);
 			return type
@@ -298,6 +524,7 @@ const rowsOf = ({ ledgerId, fileId, file, idOf }: RowsOptions) => {
 								id: postingId,
 								ledgerId,
 								transactionId: id,
+								counted,
 								date: transaction.date.toString(),
 								position,
 								accountType: type,
@@ -494,6 +721,40 @@ const withFeedSymbols = async <R>(db: Database, rows: { feed: Feed; symbol: stri
 	return linked;
 };
 
+/** What these transactions touch: the commodities whose lots they hold, the days they span, what they post to, and whether any names a group. */
+export const touchedBy = async (db: Database, ids: string[]): Promise<Touched> => {
+	const positions = await db
+		.selectFrom('postings')
+		.select(['accountId', 'commodity', 'accountType'])
+		.distinct()
+		.where((e) => anyOf(e.ref('transactionId'), ids, 'uuid'))
+		.execute();
+	const group = await db
+		.selectFrom('metadata')
+		.select('id')
+		.where((e) => anyOf(e.ref('transactionId').$notNull(), ids, 'uuid'))
+		.where('key', 'in', GROUP_KEYS)
+		.limit(1)
+		.executeTakeFirst();
+	const days = await db
+		.selectFrom('transactions')
+		.select((e) => [
+			e.fn.min<string | null>('date').as('from'),
+			e.fn.max<string | null>('date').as('to'),
+		])
+		.where((e) => anyOf(e.ref('id'), ids, 'uuid'))
+		.executeTakeFirstOrThrow();
+
+	return {
+		commodities: positions
+			.filter((p) => BALANCE_TYPES.includes(p.accountType) && !CURRENCIES.includes(p.commodity))
+			.map((p) => p.commodity),
+		spans: toSpans(days),
+		positions: positions.map((p) => ({ accountId: p.accountId, commodity: p.commodity })),
+		grouped: group !== undefined,
+	};
+};
+
 const lotCommoditiesOf = (db: Database, fileId: string): Promise<string[]> =>
 	db
 		.selectFrom('postings')
@@ -505,14 +766,3 @@ const lotCommoditiesOf = (db: Database, fileId: string): Promise<string[]> =>
 		.where((e) => noneOf(e.ref('postings.commodity'), CURRENCIES, 'text'))
 		.execute()
 		.then((r) => r.map((c) => c.commodity));
-
-const spansOf = (db: Database, fileId: string): Promise<Span[]> =>
-	db
-		.selectFrom('transactions')
-		.select((e) => [
-			e.fn.min<string | null>('transactions.date').as('from'),
-			e.fn.max<string | null>('transactions.date').as('to'),
-		])
-		.where('transactions.fileId', '=', fileId)
-		.executeTakeFirstOrThrow()
-		.then(toSpans);

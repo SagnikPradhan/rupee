@@ -15,6 +15,10 @@ describe('reading a date', () => {
 		['d MMM yyyy', '29 Aug 2026'],
 		['d MMM yyyy', '29 aug 2026'],
 		['yyyyMMdd', '20260829'],
+		['ddMMMyyyy', '29Aug2026'],
+		['do MMM yyyy', '29th Aug 2026'],
+		["yyyy-MM-dd'T'", '2026-08-29T'],
+		['MMMM d, yyyy', 'August 29, 2026'],
 	])('parses %j / %j', (format, text) => {
 		expect(parseDate({ format, text })).toEqual(Temporal.PlainDate.from('2026-08-29'));
 	});
@@ -28,8 +32,38 @@ describe('reading a date', () => {
 		['yyyy-MM-dd', '2026-8-29'],
 		['dd/MM/yyyy', '29/08/26'],
 		['d/M/yyyy', '29/08/2026'],
+		['d MMM yyyy', '2026-08-29 AAPL 12.5'],
+		['yyyy-MM-dd', 'Groceries'],
 	])('rejects %j / %j', (ft, tx) => {
 		expect(parseDate({ format: ft, text: tx })).toBeNull();
+	});
+
+	it('reads a text the same way every time, valid or not', () => {
+		const read = (text: string) => parseDate({ format: 'yyyy-MM-dd', text });
+
+		expect(read('2026-08-29')).toEqual(read('2026-08-29'));
+		expect(read('2026-08-29')).toEqual(Temporal.PlainDate.from('2026-08-29'));
+		expect(read('not a date')).toBeNull();
+		expect(read('not a date')).toBeNull();
+	});
+
+	it('keeps formats apart when their texts look alike', () => {
+		expect(parseDate({ format: 'dd/MM/yyyy', text: '01/02/2026' })?.month).toBe(2);
+		expect(parseDate({ format: 'MM/dd/yyyy', text: '01/02/2026' })?.month).toBe(1);
+	});
+
+	it('still reads after remembering more texts than it keeps', () => {
+		for (const n of Array.from({ length: 10_001 }, (_, i) => i))
+			parseDate({ format: 'yyyy-MM-dd', text: `word-${n}` });
+
+		expect(parseDate({ format: 'yyyy-MM-dd', text: '2026-08-29' })?.day).toBe(29);
+	});
+
+	it('reads against a reference date without remembering it', () => {
+		const read = (reference: Date) =>
+			parseDate({ format: 'yyyy-MM-dd HH', text: '2026-08-29 10', reference });
+
+		expect(read(new Date(0))).toEqual(read(new Date(2000, 0, 1)));
 	});
 });
 

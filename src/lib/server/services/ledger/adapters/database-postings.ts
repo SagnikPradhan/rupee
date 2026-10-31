@@ -16,7 +16,9 @@ import type { Amount } from '../domain/amounts';
 import type { Holding } from '../domain/holdings';
 import { BALANCE_TYPES } from '../domain/taxonomy';
 import type { RupeaParseLocation, RupeaPosting } from '../domain/types';
+import type { Position } from './database-files';
 import {
+	amongPositions,
 	ledgerOrder,
 	listingKey,
 	multiply,
@@ -211,8 +213,13 @@ export const listHoldings = (ledgerId: string, day: Temporal.PlainDate): ResultA
 		);
 	});
 
-/** Stores what each account holds at its assertions from from's month on, and the other files' transactions that day it cannot order. */
-export const saveBalanceChecks = (ledgerId: string, from: Temporal.PlainDate): ResultAsync<void> =>
+type BalanceChecksOptions = { from: Temporal.PlainDate; positions: Position[] };
+
+/** Stores what these positions hold at their assertions from from's month on, and the other files' transactions that day it cannot order. An assertion depends only on its own account and commodity. */
+export const saveBalanceChecks = (
+	ledgerId: string,
+	{ from, positions }: BalanceChecksOptions,
+): ResultAsync<void> =>
 	withContext('db')((db) =>
 		attempt(async () => {
 			const first = from.with({ day: 1 }).toString();
@@ -225,7 +232,8 @@ export const saveBalanceChecks = (ledgerId: string, from: Temporal.PlainDate): R
 						.distinct()
 						.where('p.ledgerId', '=', ledgerId)
 						.where('p.balance', 'is not', null)
-						.where('p.date', '>=', first),
+						.where('p.date', '>=', first)
+						.where((e) => amongPositions(e.ref('p.accountId'), e.ref('p.commodity'), positions)),
 				)
 				.with('openings', (q) =>
 					q
