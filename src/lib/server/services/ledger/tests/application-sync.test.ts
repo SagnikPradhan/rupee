@@ -432,6 +432,248 @@ describe('syncing the ledger', () => {
 			]);
 		}));
 
+	describe('transactions whose lines did not change', () => {
+		const tea = '2026-08-29 Tea\n\tExpenses:Food 1\n\tAssets:Bank\n';
+
+		const rows = (db: Database, ledgerId: string) =>
+			db
+				.selectFrom('transactions')
+				.select(['id', 'line', 'description', 'comment', 'hash'])
+				.where('ledgerId', '=', ledgerId)
+				.orderBy('line')
+				.execute();
+		const amounts = async (db: Database, ledgerId: string) =>
+			(
+				await db
+					.selectFrom('postings')
+					.select('amount')
+					.where('ledgerId', '=', ledgerId)
+					.where('amount', '>', 0n)
+					.orderBy('date')
+					.execute()
+			).map((p) => p.amount);
+
+		it('are not read again, however far their lines move', ({ context, db, storage }) =>
+			provide(context, async () => {
+				const ledger = await createLedger(db);
+				await put(storage, ledger, 'a.rupea', tea);
+				await Sync.syncIndex(ledger);
+				const [before] = await rows(db, ledger.id);
+				await db
+					.updateTable('postings')
+					.set({ amount: 7n })
+					.where('ledgerId', '=', ledger.id)
+					.where('amount', '>', 0n)
+					.execute();
+
+				await put(storage, ledger, 'a.rupea', `${salary}\n${tea}`);
+				await Sync.syncIndex(ledger);
+
+				const [, after] = await rows(db, ledger.id);
+				expect(after?.id).toBe(before?.id);
+				expect(after?.line).toBeGreaterThan(before?.line ?? 0);
+				expect(await amounts(db, ledger.id)).toContain(7n);
+			}));
+
+		it('are read when any of their lines changes, even only a comment', ({
+			context,
+			db,
+			storage,
+		}) =>
+			provide(context, async () => {
+				const ledger = await createLedger(db);
+				await put(storage, ledger, 'a.rupea', tea);
+				await Sync.syncIndex(ledger);
+				const [before] = await rows(db, ledger.id);
+				const posted = () =>
+					db
+						.selectFrom('postings')
+						.select('id')
+						.where('ledgerId', '=', ledger.id)
+						.orderBy('id')
+						.execute();
+				const postedBefore = await posted();
+
+				const commented = tea.replace('\tExpenses', '\t; hot\n\tExpenses');
+				await put(storage, ledger, 'a.rupea', commented);
+				await Sync.syncIndex(ledger);
+
+				const [after] = await rows(db, ledger.id);
+				expect(after?.id).toBe(before?.id);
+				expect(after?.comment).toBe('hot');
+				expect(after?.hash).not.toBe(before?.hash);
+				expect(await posted()).toEqual(postedBefore);
+			}));
+
+		it('leave the same rows after any edits as reading the last file from scratch', ({
+			context,
+			db,
+			storage,
+		}) =>
+			provide(context, async () => {
+				const coffee = '2026-08-30 Coffee\n\tAssets:Cash -5 = -5\n\t- ref: a\n\tExpenses:Coffee\n';
+				const buy = '2026-08-31 Buy\n\tAssets:Zerodha 10 INFY @ 1500\n\tAssets:Bank\n';
+				const sell = '2026-08-31 Sell\n\tAssets:Zerodha -4 INFY {1500} @ 1700\n\tAssets:Bank\n';
+				const edits = [
+					`${tea}\n${coffee}\n${buy}\n${sell}`,
+					`${salary}\n${tea}\n${coffee}\n${buy}\n${sell}`,
+					`${sell}\n${tea}\n${tea}\n${buy}\n${coffee}`,
+					`nonsense\n\n${tea}\n${buy}`,
+					`${buy}\n${coffee.replace('-5 = -5', '-6 = -6')}\n${tea}\n${sell}`,
+					`- statement: a.pdf\n\n${coffee}\n; note\n\n${buy}\n${tea.replace('Tea', 'Chai')}\n${sell}`,
+				];
+
+				const held = async (ledgerId: string) => ({
+					transactions: await db
+						.selectFrom('transactions')
+						.select(['line', 'date', 'time', 'description', 'comment', 'counted', 'hash'])
+						.where('ledgerId', '=', ledgerId)
+						.orderBy('line')
+						.execute(),
+					postings: await db
+						.selectFrom('postings')
+						.innerJoin('accounts', 'accounts.id', 'postings.accountId')
+						.innerJoin('transactions', 'transactions.id', 'postings.transactionId')
+						.select([
+							'transactions.line',
+							'postings.position',
+							'accounts.name',
+							'postings.amount',
+							'postings.commodity',
+							'postings.balance',
+							'postings.actual',
+							'postings.counted',
+						])
+						.where('postings.ledgerId', '=', ledgerId)
+						.orderBy(['transactions.line', 'postings.position'])
+						.execute(),
+					accounts: await db
+						.selectFrom('accounts')
+						.select('name')
+						.where('ledgerId', '=', ledgerId)
+						.orderBy('name')
+						.execute(),
+				});
+
+				const edited = await createLedger(db);
+				for (const content of edits) {
+					await put(storage, edited, 'a.rupea', content);
+					await Sync.syncIndex(edited);
+				}
+				const fresh = await createLedger(db);
+				await put(storage, fresh, 'a.rupea', edits.at(-1) ?? '');
+				await Sync.syncIndex(fresh);
+
+				expect(await held(edited.id)).toEqual(await held(fresh.id));
+			}));
+
+		it('do not count as moved when one above them changes', ({ context, db, storage }) =>
+			provide(context, async () => {
+				const ledger = await createLedger(db);
+				const coffee = '2026-08-30 Coffee\n\tAssets:Cash -5 = -5\n\tExpenses:Coffee\n';
+				await put(storage, ledger, 'a.rupea', `${tea}\n${coffee}`);
+				await Sync.syncIndex(ledger);
+				await db
+					.updateTable('postings')
+					.set({ actual: 999n })
+					.where('ledgerId', '=', ledger.id)
+					.where('balance', 'is not', null)
+					.execute();
+
+				const commented = tea.replace('\tExpenses', '\t; hot\n\tExpenses');
+				await put(storage, ledger, 'a.rupea', `${commented}\n${coffee}`);
+				await Sync.syncIndex(ledger);
+
+				const asserted = await db
+					.selectFrom('postings')
+					.select('actual')
+					.where('ledgerId', '=', ledger.id)
+					.where('balance', 'is not', null)
+					.executeTakeFirst();
+				expect(asserted?.actual).toBe(999n);
+			}));
+
+		it('reads a copy of one held once as new', ({ context, db, storage }) =>
+			provide(context, async () => {
+				const ledger = await createLedger(db);
+				await put(storage, ledger, 'a.rupea', tea);
+				await Sync.syncIndex(ledger);
+
+				await put(storage, ledger, 'a.rupea', `${tea}\n${tea}`);
+				await Sync.syncIndex(ledger);
+
+				expect(await rows(db, ledger.id)).toHaveLength(2);
+				expect(await count(db.selectFrom('postings').where('ledgerId', '=', ledger.id))).toBe(4);
+			}));
+
+		it('drops one copy of two when one goes, keeping the first', ({ context, db, storage }) =>
+			provide(context, async () => {
+				const ledger = await createLedger(db);
+				await put(storage, ledger, 'a.rupea', `${tea}\n${tea}`);
+				await Sync.syncIndex(ledger);
+				const [first] = await rows(db, ledger.id);
+
+				await put(storage, ledger, 'a.rupea', tea);
+				await Sync.syncIndex(ledger);
+
+				expect((await rows(db, ledger.id)).map((t) => t.id)).toEqual([first?.id]);
+				expect(await count(db.selectFrom('postings').where('ledgerId', '=', ledger.id))).toBe(2);
+			}));
+
+		it('go when a bad header above stops the file being read, and return with it fixed', ({
+			context,
+			db,
+			storage,
+		}) =>
+			provide(context, async () => {
+				const ledger = await createLedger(db);
+				await put(storage, ledger, 'a.rupea', `${salary}\n${tea}`);
+				await Sync.syncIndex(ledger);
+
+				await put(storage, ledger, 'a.rupea', `not a header\n\n${tea}`);
+				const failed = (await Sync.syncIndex(ledger))._unsafeUnwrap();
+				expect(failed).toHaveLength(1);
+				expect(await rows(db, ledger.id)).toEqual([]);
+
+				await put(storage, ledger, 'a.rupea', `${salary}\n${tea}`);
+				expect((await Sync.syncIndex(ledger))._unsafeUnwrap()).toEqual([]);
+				expect((await rows(db, ledger.id)).map((t) => t.description)).toEqual(['Salary', 'Tea']);
+			}));
+
+		it('are read again when an older indexer read them, and hold a hash after', ({
+			context,
+			db,
+			storage,
+		}) =>
+			provide(context, async () => {
+				const ledger = await createLedger(db);
+				await put(storage, ledger, 'a.rupea', tea);
+				await Sync.syncIndex(ledger);
+				await db
+					.updateTable('postings')
+					.set({ amount: 7n })
+					.where('ledgerId', '=', ledger.id)
+					.where('amount', '>', 0n)
+					.execute();
+				await db
+					.updateTable('transactions')
+					.set({ hash: null })
+					.where('ledgerId', '=', ledger.id)
+					.execute();
+				await db
+					.updateTable('ledgerFiles')
+					.set({ indexer: INDEXER - 1 })
+					.where('ledgerId', '=', ledger.id)
+					.execute();
+
+				await Sync.syncIndex(ledger);
+
+				const [row] = await rows(db, ledger.id);
+				expect(row?.hash).toEqual(expect.any(String));
+				expect(await amounts(db, ledger.id)).not.toContain(7n);
+			}));
+	});
+
 	it('rewrites every posting of a file an older indexer read', ({ context, db, storage }) =>
 		provide(context, async () => {
 			const ledger = await createLedger(db);

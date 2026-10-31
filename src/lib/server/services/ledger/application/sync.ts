@@ -12,7 +12,7 @@ import * as Jobs from '../adapters/jobs';
 import { embedTexts, MODEL } from '../adapters/prediction-model2vec';
 import { formatQuantity, type Amount } from '../domain/amounts';
 import { checkGroups } from '../domain/groups';
-import { displayLocation, parse } from '../domain/parser';
+import { displayLocation, parseChanged } from '../domain/parser';
 import { plan } from '../domain/sync';
 import { filled, wordsOf, type Unembedded } from '../domain/text';
 import { DisposalKind, type Ledger, type RupeaFile } from '../domain/types';
@@ -84,25 +84,31 @@ type IndexFileOptions = { ledgerId: string; file: RupeaFile };
 
 /** A file waiting for review keeps only its metadata, so where it came from is known, but nothing in it counts or fails. */
 const indexFile = ({ ledgerId, file }: IndexFileOptions): ResultAsync<Indexed> =>
-	withContext('config')((config) => {
-		const parsed = parse(config.ledger, file);
-		const kept = isCounted(file.key)
-			? parsed
-			: { ...parsed, succeeded: [], prices: [], links: [], failed: [] };
+	withContext('config')((config) =>
+		DB.findHeld(ledgerId, file.key).andThen((held) => {
+			const counted = isCounted(file.key);
+			const parsed = parseChanged(config.ledger, file, counted ? held.hashes : {});
+			const kept = counted
+				? parsed
+				: { ...parsed, succeeded: [], prices: [], links: [], failed: [] };
 
-		const indexed = {
-			metadata: kept.metadata,
-			transactions: kept.succeeded,
-			prices: kept.prices,
-			links: kept.links,
-		};
-		return DB.indexFile(ledgerId, {
-			key: file.key,
-			version: file.version,
-			file: indexed,
-			failed: kept.failed,
-		}).map((t) => ({ failed: [], ...t }));
-	});
+			const indexed = {
+				metadata: kept.metadata,
+				transactions: kept.succeeded,
+				prices: kept.prices,
+				links: kept.links,
+			};
+			return DB.indexFile(ledgerId, {
+				key: file.key,
+				version: file.version,
+				file: indexed,
+				failed: kept.failed,
+				held,
+				kept: kept.kept,
+				hashes: kept.hashes,
+			}).map((t) => ({ failed: [], ...t }));
+		}),
+	);
 
 type UnindexOptions = { ledgerId: string; key: string };
 

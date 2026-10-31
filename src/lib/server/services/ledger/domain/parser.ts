@@ -1,5 +1,6 @@
 import type { LedgerConfiguration } from '#lib/server/shared/context/config.ts';
 import { parseDate, parseTime, type ReadOptions } from '#lib/server/shared/dates.ts';
+import { sha256 } from '#lib/server/shared/hash.ts';
 import { batch, type Batch } from '#lib/server/shared/result/batch.ts';
 import { fault, type RupeaError } from '#lib/server/shared/result/error.ts';
 import { err, ok, type Result } from '#lib/server/shared/result/result.ts';
@@ -55,9 +56,38 @@ type RupeaParsedFile = Batch<RupeaTransaction> & {
 /** What a file holds for the ledger, read from its tree. */
 export const parse = (
 	c: LedgerConfiguration,
+	f: Pick<RupeaFile, 'key' | 'content'>,
+): RupeaParsedFile => parsedFrom(parseTree(c, f));
+
+export type KeptEntry = { hash: string; line: number };
+
+/** As parse, leaving out each transaction whose lines hash to one held, so only what changed is read. Formats go in the hash, as they decide what the same lines mean. */
+export const parseChanged = (
+	c: LedgerConfiguration,
 	file: Pick<RupeaFile, 'key' | 'content'>,
-): RupeaParsedFile => {
-	const tree = parseTree(c, file);
+	held: Record<string, number>,
+) => {
+	const formats = JSON.stringify([c.dateFormats, c.timeFormats]);
+	const left = { ...held };
+	const kept: KeptEntry[] = [];
+	const hashes: Record<number, string> = {};
+
+	const keep = (entry: RupeaLine[]) => {
+		const hash = sha256(`${formats}\n${entry.map((l) => l.content).join('\n')}`);
+		const line = entry[0]!.location.line;
+		const count = left[hash] ?? 0;
+		hashes[line] = hash;
+		if (count === 0) return false;
+
+		left[hash] = count - 1;
+		kept.push({ hash, line });
+		return true;
+	};
+
+	return { ...parsedFrom(readTree(c, file, keep)), kept, hashes };
+};
+
+const parsedFrom = (tree: RupeaFileNode): RupeaParsedFile => {
 	const entries = tree.children;
 
 	return {
@@ -72,7 +102,16 @@ export const parse = (
 /** Metadata above the first entry belongs to the file, and a comment to what sits right above it. */
 export const parseTree = (
 	c: LedgerConfiguration,
+	f: Pick<RupeaFile, 'key' | 'content'>,
+): RupeaFileNode => readTree(c, f, () => false);
+
+/** Whether to leave out a transaction, given its lines. */
+type Keep = (entry: RupeaLine[]) => boolean;
+
+const readTree = (
+	c: LedgerConfiguration,
 	{ key, content }: Pick<RupeaFile, 'key' | 'content'>,
+	keep: Keep,
 ): RupeaFileNode => {
 	const input = cursorOf(lines(key, content));
 	const top = readPreamble(input);
@@ -81,7 +120,7 @@ export const parseTree = (
 		kind: NodeKind.File,
 		comments: top.comments,
 		metadata: top.metadata,
-		children: [...top.failed, ...readEntries(c, input)],
+		children: [...top.failed, ...readEntries(c, input, keep)],
 	};
 };
 
@@ -118,12 +157,16 @@ const readPreamble = (input: Cursor<RupeaLine>) => {
 };
 
 /** Comments that nothing above holds stand as a note. */
-const readEntries = (c: LedgerConfiguration, input: Cursor<RupeaLine>): RupeaEntryNode[] => {
+const readEntries = (
+	c: LedgerConfiguration,
+	input: Cursor<RupeaLine>,
+	keep: Keep,
+): RupeaEntryNode[] => {
 	const entries: RupeaEntryNode[] = [];
 
 	for (const line of drain(input)) {
 		if (isComment(line)) entries.push(note([line, ...takeWhile(input, isComment)]));
-		if (!isComment(line) && !isBlank(line)) entries.push(...readNode(c, line, input));
+		if (!isComment(line) && !isBlank(line)) entries.push(...readNode(c, line, input, keep));
 	}
 	return entries;
 };
@@ -133,14 +176,21 @@ const readNode = (
 	c: LedgerConfiguration,
 	line: RupeaLine,
 	rest: Cursor<RupeaLine>,
+	keep: Keep,
 ): RupeaEntryNode[] => {
 	if (isPLine(line)) return [readPLine(c, line, commentsUnder(rest))];
 	if (isMetadata(line)) return [failed([line], commentsUnder(rest), [detached(line)])];
 
-	const header = parseHeader(c, line);
-	if (header.isErr()) return unread(c, line, rest, header.error);
+	const body = bodyOf(rest);
+	if (keep([line, ...body])) return [];
 
-	return [readTransaction(c, { line, header: header.value, body: bodyOf(rest) })];
+	const header = parseHeader(c, line);
+	if (header.isErr()) {
+		putBack(rest, body.length);
+		return unread(c, line, rest, header.error);
+	}
+
+	return [readTransaction(c, { line, header: header.value, body })];
 };
 
 /** After a bad header only P lines are read; the lines between them are kept as written. */

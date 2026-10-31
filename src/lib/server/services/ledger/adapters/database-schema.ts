@@ -109,6 +109,7 @@ export const transactions = PG.pgTable(
 			.generatedAlwaysAs(sql`coalesce("time", '00:00')`), // a missing time sorts as midnight
 		description: t.text().notNull(),
 		comment: t.text(), // the comment lines above its header, joined
+		hash: t.text(), // of the lines it was read from, so a save parses only what changed
 		embedding: t.vector({ dimensions: EMBEDDING_DIMENSIONS }), // of the description; filled lazily
 		embeddingModel: t.text(),
 		counted: t.boolean().notNull().default(true), // false for a group's evidence; set once files settle

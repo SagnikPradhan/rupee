@@ -12,7 +12,7 @@ import { sql, type SqlBool } from 'kysely';
 import { v7 as uuidv7 } from 'uuid';
 import { GROUP_KEYS } from '../domain/groups';
 import { CURRENCIES } from '../domain/lots';
-import { displayLocation } from '../domain/parser';
+import { displayLocation, type KeptEntry } from '../domain/parser';
 import { marketPrices } from '../domain/prices';
 import { INDEXER } from '../domain/sync';
 import { accountType, BALANCE_TYPES, parentsOf } from '../domain/taxonomy';
@@ -75,11 +75,44 @@ export const findLatestFile = (ledgerId: string, account: string): ResultAsync<s
 		).map((r) => r?.key ?? null),
 	);
 
+export type Held = {
+	current: boolean;
+	transactions: OldTransaction[];
+	hashes: Record<string, number>;
+};
+
+/** What a file's rows hold: its transactions, and how many of each hash can be kept unread, which is none if an older indexer read it. */
+export const findHeld = (ledgerId: string, key: string): ResultAsync<Held> =>
+	withContext('db')((db) =>
+		attempt(async () => {
+			const file = await db
+				.selectFrom('ledgerFiles')
+				.select(['id', 'indexer'])
+				.where('ledgerId', '=', ledgerId)
+				.where('key', '=', key)
+				.executeTakeFirst();
+			const transactions = file ? await oldTransactions(db, file.id) : [];
+			const current = file?.indexer === INDEXER;
+			const byHash = Object.groupBy(transactions, (t) => t.hash ?? '');
+
+			return {
+				current,
+				transactions,
+				hashes: current
+					? Object.fromEntries(Object.entries(byHash).map(([h, g = []]) => [h, g.length]))
+					: {},
+			};
+		}),
+	);
+
 type IndexFileOptions = {
 	key: string;
 	version: string;
 	file: RupeaLedgerFile;
 	failed: RupeaError[];
+	held: Held;
+	kept: KeptEntry[];
+	hashes: Record<number, string>;
 };
 
 export type Position = { accountId: string; commodity: string };
@@ -92,10 +125,10 @@ export type Touched = {
 	grouped: boolean;
 };
 
-/** Replaces what a file indexes and what failed to parse in it, each transaction keeping its id where it can and each description its embedding, so saving a file neither moves a page nor re-embeds it. Transactions that hold what they held keep their rows, so a small edit writes little. */
+/** Replaces what a file indexes and what failed to parse in it, each transaction keeping its id where it can and each description its embedding, so saving a file neither moves a page nor re-embeds it. Transactions that hold what they held keep their rows, so a small edit writes little, and those kept unread are not even compared. */
 export const indexFile = (
 	ledgerId: string,
-	{ key, version, file, failed }: IndexFileOptions,
+	{ key, version, file, failed, held, kept, hashes }: IndexFileOptions,
 ): ResultAsync<Touched> => {
 	const untyped = untypedAccount(file);
 	if (untyped) return errAsync(untyped);
@@ -103,12 +136,15 @@ export const indexFile = (
 	return atomically(() =>
 		withContext('db')((tx) =>
 			attempt(async () => {
-				const readBy = await indexerOf(tx, ledgerId, key);
 				const fileId = await saveVersion(tx, { ledgerId, key, version });
-				const old = await oldTransactions(tx, fileId);
-				const rows = rowsOf({ ledgerId, fileId, file, matchOf: matchesFrom(old) });
-				const kept = new Set(rows.transactions.map((t) => t.id));
-				const unmatched = old.map((o) => o.id).filter((id) => !kept.has(id));
+				const old = held.transactions;
+				const unread = keptRows({ ledgerId, fileId, old, kept });
+				const unreadIds = new Set(unread.map((t) => t.id));
+				const free = old.filter((o) => !unreadIds.has(o.id));
+				const rows = rowsOf({ ledgerId, fileId, file, hashes, matchOf: matchesFrom(free) });
+				const read = rows.transactions.map((t) => t.id);
+				const matched = new Set(read);
+				const unmatched = free.map((o) => o.id).filter((id) => !matched.has(id));
 				const postings = await withAccounts(tx, ledgerId, rows.postings);
 				const prices = await withSymbols(tx, { feed: Feed.Ledger, ledgerId }, rows.prices);
 				const links = await withFeedSymbols(tx, rows.links);
@@ -121,16 +157,13 @@ export const indexFile = (
 
 				const changes = changesFrom({
 					old,
-					heldBefore: readBy === INDEXER ? await heldIn(tx, fileId) : () => '',
-					transactions: rows.transactions,
+					heldBefore: held.current ? await heldIn(tx, read) : () => '',
+					unread,
+					read: rows.transactions,
 					postings,
 					metadata: rows.metadata,
 				});
-				const priceChanges = priceChangesFrom(
-					await oldPrices(tx, fileId),
-					prices,
-					readBy === INDEXER,
-				);
+				const priceChanges = priceChangesFrom(await oldPrices(tx, fileId), prices, held.current);
 				const before = await touchedBy(tx, [...changes.moved, ...changes.stale, ...unmatched]);
 
 				await tx.deleteFrom('metadata').where('fileId', '=', fileId).execute();
@@ -220,16 +253,6 @@ const untypedAccount = (file: RupeaLedgerFile): RupeaError | null =>
 		)
 		.at(0) ?? null;
 
-/** A file an older indexer read has all its rows written again, as that is what a new indexer is for. */
-const indexerOf = (db: Database, ledgerId: string, key: string) =>
-	db
-		.selectFrom('ledgerFiles')
-		.select('indexer')
-		.where('ledgerId', '=', ledgerId)
-		.where('key', '=', key)
-		.executeTakeFirst()
-		.then((f) => f?.indexer);
-
 type VersionOptions = { ledgerId: string; key: string; version: string };
 
 const saveVersion = (db: Database, { ledgerId, key, version }: VersionOptions) =>
@@ -249,12 +272,13 @@ type OldTransaction = {
 	line: number;
 	comment: string | null;
 	counted: boolean;
+	hash: string | null;
 };
 
 const oldTransactions = (db: Database, fileId: string): Promise<OldTransaction[]> =>
 	db
 		.selectFrom('transactions')
-		.select(['id', 'date', 'time', 'description', 'line', 'comment', 'counted'])
+		.select(['id', 'date', 'time', 'description', 'line', 'comment', 'counted', 'hash'])
 		.where('fileId', '=', fileId)
 		.orderBy('line')
 		.execute();
@@ -322,9 +346,11 @@ const heldFrom = (postings: PostingHeld[], metadata: MetadataHeld[]) => {
 		);
 };
 
-const heldIn = async (db: Database, fileId: string) => {
-	const owners = db.selectFrom('transactions').select('id').where('fileId', '=', fileId);
-	const owned = db.selectFrom('postings').select('id').where('transactionId', 'in', owners);
+const heldIn = async (db: Database, ids: string[]) => {
+	const owned = db
+		.selectFrom('postings')
+		.select('id')
+		.where((e) => anyOf(e.ref('transactionId'), ids, 'uuid'));
 
 	const postings = await db
 		.selectFrom('postings')
@@ -344,13 +370,13 @@ const heldIn = async (db: Database, fileId: string) => {
 			'balance',
 			'comment',
 		])
-		.where('transactionId', 'in', owners)
+		.where((e) => anyOf(e.ref('transactionId'), ids, 'uuid'))
 		.orderBy('position')
 		.execute();
 	const onTransactions = await db
 		.selectFrom('metadata')
 		.select(['transactionId', 'postingId', 'position', 'key', 'value'])
-		.where('transactionId', 'in', owners)
+		.where((e) => anyOf(e.ref('transactionId').$notNull(), ids, 'uuid'))
 		.orderBy('position')
 		.execute();
 	const onPostings = await db
@@ -399,24 +425,28 @@ const priceChangesFrom = <P extends PriceHeld>(
 type ChangesOptions<P, M> = {
 	old: OldTransaction[];
 	heldBefore: (id: string) => string;
-	transactions: TransactionRow[];
+	unread: TransactionRow[];
+	read: TransactionRow[];
 	postings: P[];
 	metadata: M[];
 };
 
-/** Of a file's rows, only those to write: a transaction's own when new or on another line, and what it holds when that differs. Moved are those whose order changed, which lots and assertions depend on. */
+/** Of a file's rows, only those to write: a transaction's own when new, on another line or read from other lines, and what it holds when that differs. Moved are those whose order changed, which lots and assertions depend on. */
 const changesFrom = <P extends PostingHeld, M extends MetadataHeld>({
 	old,
 	heldBefore,
-	transactions,
+	unread,
+	read,
 	postings,
 	metadata,
 }: ChangesOptions<P, M>) => {
 	const heldNow = heldFrom(postings, metadata);
 	const before = Object.fromEntries(old.map((o) => [o.id, o]));
 
-	const added = transactions.filter((t) => !before[t.id]).map((t) => t.id);
-	const stale = transactions
+	const transactions = [...unread, ...read].toSorted((a, b) => a.line - b.line);
+
+	const added = read.filter((t) => !before[t.id]).map((t) => t.id);
+	const stale = read
 		.filter((t) => before[t.id] && heldBefore(t.id) !== heldNow(t.id))
 		.map((t) => t.id);
 	const rewritten = new Set([...added, ...stale]);
@@ -432,7 +462,7 @@ const changesFrom = <P extends PostingHeld, M extends MetadataHeld>({
 		moved: kept.filter((t, i) => keptBefore[i]?.id !== t.id).map((t) => t.id),
 		transactions: transactions.filter((t) => {
 			const o = before[t.id];
-			return !o || o.line !== t.line || o.comment !== t.comment;
+			return !o || o.line !== t.line || o.comment !== t.comment || o.hash !== t.hash;
 		}),
 		postings: written,
 		metadata: metadata.filter((m) => {
@@ -465,6 +495,19 @@ type TransactionRow = {
 	description: string;
 	comment: string | null;
 	counted: boolean;
+	hash: string | null;
+};
+
+type KeptOptions = { ledgerId: string; fileId: string; old: OldTransaction[]; kept: KeptEntry[] };
+
+/** The old row of each transaction kept unread, on the line it is on now; rows of one hash go in file order. */
+const keptRows = ({ ledgerId, fileId, old, kept }: KeptOptions): TransactionRow[] => {
+	const free = Object.groupBy(old, (o) => o.hash ?? '');
+
+	return kept.flatMap(({ hash, line }) => {
+		const o = free[hash]?.shift();
+		return o ? [{ ...o, ledgerId, fileId, line }] : [];
+	});
 };
 
 /** A kept transaction keeps whether it counts, which settling decides, and its embedding. */
@@ -477,6 +520,7 @@ const saveTransactions = async (db: Database, rows: TransactionRow[]) => {
 				o.column('id').doUpdateSet((e) => ({
 					line: e.ref('excluded.line'),
 					comment: e.ref('excluded.comment'),
+					hash: e.ref('excluded.hash'),
 				})),
 			)
 			.execute();
@@ -486,11 +530,12 @@ type RowsOptions = {
 	ledgerId: string;
 	fileId: string;
 	file: RupeaLedgerFile;
+	hashes: Record<number, string>;
 	matchOf: (t: RupeaTransaction) => OldTransaction | undefined;
 };
 
 /** Each table's rows for a parsed file, its prices and links still to be put on their symbols. */
-const rowsOf = ({ ledgerId, fileId, file, matchOf }: RowsOptions) => {
+const rowsOf = ({ ledgerId, fileId, file, hashes, matchOf }: RowsOptions) => {
 	const indexed = file.transactions.map((t) => {
 		const match = matchOf(t);
 
@@ -512,6 +557,7 @@ const rowsOf = ({ ledgerId, fileId, file, matchOf }: RowsOptions) => {
 		time: transaction.time?.toString() ?? null,
 		description: transaction.description,
 		comment: transaction.comment,
+		hash: hashes[transaction.location.line] ?? null,
 	}));
 	const postings = indexed.flatMap(({ id, counted, transaction, postings: p }) =>
 		p.flatMap(({ id: postingId, posting }, position) => {

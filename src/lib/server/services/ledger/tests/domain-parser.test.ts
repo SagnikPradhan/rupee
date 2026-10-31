@@ -1,6 +1,6 @@
 import { defaultConfiguration } from '#lib/server/shared/context/config.ts';
 import { parseAmount, formatAmount, type Amount } from '#services/ledger/domain/amounts.ts';
-import { displayLocation, parse } from '#services/ledger/domain/parser.ts';
+import { displayLocation, parse, parseChanged } from '#services/ledger/domain/parser.ts';
 import { Feed, PriceKind, type RupeaPosting } from '#services/ledger/domain/types.ts';
 import { describe, expect, it } from 'vitest';
 
@@ -793,5 +793,86 @@ describe('reading a transaction header', () => {
 
 	it.each(['2026-08-29', '2026-08-29 18:45', '08/29/2026 Groceries'])('rejects %j', (content) => {
 		expect(header(content).failed).toMatchObject([{ type: 'ParseInvalidTransactionHeader' }]);
+	});
+});
+
+describe('parseChanged', () => {
+	const tea = '2026-08-29 Tea\n\tExpenses:Food 1\n\tAssets:Bank\n';
+	const milk = '2026-08-30 Milk\n\tExpenses:Food 2\n\tAssets:Bank\n';
+	const config = defaultConfiguration.ledger;
+
+	const read = (content: string, held: Record<string, number> = {}, c = config) =>
+		parseChanged(c, { key: file, content }, held);
+	const hashOf = (content: string, c = config) => read(content, {}, c).hashes[1] ?? '';
+
+	it('reads everything when nothing is held, and hashes each transaction by its line', () => {
+		const parsed = read(`${tea}\n${milk}`);
+
+		expect(parsed.succeeded.map((t) => t.description)).toEqual(['Tea', 'Milk']);
+		expect(parsed.kept).toEqual([]);
+		expect(Object.keys(parsed.hashes)).toEqual(['1', '5']);
+	});
+
+	it('leaves out what is held, wherever it now sits', () => {
+		const parsed = read(`${milk}\n${tea}`, { [hashOf(tea)]: 1 });
+
+		expect(parsed.succeeded.map((t) => t.description)).toEqual(['Milk']);
+		expect(parsed.kept).toEqual([{ hash: hashOf(tea), line: 5 }]);
+	});
+
+	it('leaves out only as many copies as are held', () => {
+		const parsed = read(`${tea}\n${tea}`, { [hashOf(tea)]: 1 });
+
+		expect(parsed.kept).toEqual([{ hash: hashOf(tea), line: 1 }]);
+		expect(parsed.succeeded.map((t) => t.location.line)).toEqual([5]);
+	});
+
+	it('does not change what it is given', () => {
+		const held = { [hashOf(tea)]: 1 };
+		read(tea, held);
+
+		expect(held).toEqual({ [hashOf(tea)]: 1 });
+	});
+
+	it.each([
+		['a posting', tea.replace('Food 1', 'Food 2')],
+		['a comment under it', tea.replace('\tExpenses', '\t; hot\n\tExpenses')],
+		['its metadata', tea.replace('\tExpenses', '\t- ref: a\n\tExpenses')],
+		['an indent', tea.replace('\tAssets', '  Assets')],
+	])('reads it again when %s changes', (_, changed) => {
+		const parsed = read(changed, { [hashOf(tea)]: 1 });
+
+		expect(parsed.kept).toEqual([]);
+		expect(parsed.succeeded).toHaveLength(1);
+	});
+
+	it('reads it again when the formats that decide its date change', () => {
+		const us = { ...config, dateFormats: ['MM/dd/yyyy', ...config.dateFormats] };
+
+		expect(hashOf(tea, us)).not.toBe(hashOf(tea));
+	});
+
+	it('keeps nothing after a bad header, which stops the transactions being read', () => {
+		const parsed = read(`nonsense\n\n${tea}`, { [hashOf(tea)]: 1 });
+
+		expect(parsed.kept).toEqual([]);
+		expect(parsed.succeeded).toEqual([]);
+		expect(parsed.failed).toMatchObject([{ type: 'ParseInvalidTransactionHeader' }]);
+	});
+
+	it('puts back the lines under a bad header, so they fail with it', () => {
+		const parsed = read(`nonsense\n\tExpenses:Food 1\n\nP 2026-08-29 INFY 1500\n`);
+
+		expect(parsed.failed).toMatchObject([{ type: 'ParseInvalidTransactionHeader' }]);
+		expect(parsed.prices.map((p) => p.commodity)).toEqual(['INFY']);
+	});
+
+	it('still reads prices, links and the file metadata among what it keeps', () => {
+		const parsed = read(`- statement: a.pdf\n\n${tea}\nP 2026-08-29 INFY 1500\n`, {
+			[hashOf(tea)]: 1,
+		});
+
+		expect(parsed.metadata).toEqual({ statement: ['a.pdf'] });
+		expect(parsed.prices).toHaveLength(1);
 	});
 });
